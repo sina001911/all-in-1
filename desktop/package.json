@@ -1,0 +1,18 @@
+{
+  "name": "all-in-1-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Independent Windows desktop application for all_in_1 (D1 foundation). Desktop-only dependencies are isolated here so the reusable core keeps zero runtime dependencies.",
+  "main": "src/main.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "start": "electron .",
+    "selftest": "electron . --selftest"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "electron": "^44.0.0",
+    "typescript": "^5.9.0"
+  }
+}

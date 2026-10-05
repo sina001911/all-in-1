@@ -1,0 +1,18 @@
+{
+  "name": "all_in_1",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Global visual + multi-model + media AI layer for OpenCode (P1 registries/roles/cost policy/project detection, P2 browser/screenshot/artifacts, P3 vision/model catalogue/capabilities/provider adapter validation, P4 execution layer/capability selection/egress security/live invocation, P5 specialist layer/HITL workflow orchestration/structured-output validation/observability, P6 OpenCode plugin binding/command surface/edit boundary)",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "^2.0.22",
+    "@types/node": "^24.0.0",
+    "playwright": "^1.63.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

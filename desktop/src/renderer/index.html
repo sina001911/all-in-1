@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'" />
+  <title>all_in_1 — Desktop</title>
+</head>
+<body>
+  <header>
+    <h1>all_in_1 <span id="version">D1 foundation</span></h1>
+    <div id="status">loading…</div>
+  </header>
+  <main>
+    <section>
+      <h2>Frozen defaults (read-only)</h2>
+      <pre id="frozen">…</pre>
+    </section>
+    <section>
+      <h2>Run a diagnostic (full 7-gate pipeline)</h2>
+      <div class="row">
+        <label>Mode
+          <select id="mode">
+            <option value="INSPECT">INSPECT</option>
+            <option value="SUGGEST">SUGGEST</option>
+            <option value="BUILD">BUILD</option>
+          </select>
+        </label>
+        <label>Subject <input id="subject" type="text" value="the authentication module" /></label>
+        <label class="check"><input id="auto" type="checkbox" /> --auto (bounded)</label>
+        <button id="run">Run</button>
+        <button id="cancel" disabled>Cancel</button>
+      </div>
+      <pre id="output">no run yet</pre>
+    </section>
+    <section>
+      <h2>Approvals</h2>
+      <pre id="approvals">…</pre>
+    </section>
+    <section>
+      <h2>Usage</h2>
+      <pre id="usage">…</pre>
+    </section>
+    <section>
+      <h2>Credentials (names only — values are never returned)</h2>
+      <pre id="credentials">…</pre>
+    </section>
+    <section>
+      <h2>Audit log (redacted)</h2>
+      <pre id="logs">…</pre>
+    </section>
+  </main>
+  <script src="renderer.js"></script>
+</body>
+</html>
