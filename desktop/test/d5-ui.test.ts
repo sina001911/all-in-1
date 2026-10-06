@@ -91,23 +91,31 @@ describe("renderer parses as browser JavaScript (the D1 regression)", () => {
     const calls: string[] = [];
 
     function fakeEl() {
-      return {
+      const node: Record<string, unknown> = {
         addEventListener: (ev: string) => void calls.push(ev),
         appendChild: () => undefined,
         removeChild: () => undefined,
+        remove: () => undefined,
         querySelector: () => fakeEl(),
+        querySelectorAll: () => [],
         createElement: () => fakeEl(),
         createTextNode: () => ({ nodeType: 3 }),
-        get firstChild() {
-          return null;
-        },
-        set textContent(v: string) {
-          void v;
-        },
-        set innerHTML(v: string) {
-          void v;
-        },
+        setAttribute: (k: string) => void calls.push("attr:" + k),
+        getAttribute: () => null,
+        removeAttribute: () => undefined,
+        contains: () => false,
+        focus: () => undefined,
+        blur: () => undefined,
+        classList: { add: () => undefined, remove: () => undefined, toggle: () => undefined },
+        dataset: {},
+        parentNode: null,
+        ownerDocument: null,
       };
+      Object.defineProperty(node, "firstChild", { get: () => null });
+      for (const prop of ["textContent", "innerHTML", "className", "value", "hidden", "disabled", "id", "title", "type", "colSpan", "size", "rows", "scrollTop", "scrollHeight", "href", "parentElement"]) {
+        node[prop] = "";
+      }
+      return node;
     }
 
     const api = new Proxy(
@@ -143,8 +151,16 @@ describe("renderer parses as browser JavaScript (the D1 regression)", () => {
         getElementById: () => fakeEl(),
         createElement: () => fakeEl(),
         createTextNode: () => ({ nodeType: 3 }),
+        querySelectorAll: () => [],
         addEventListener: (ev: string) => void calls.push(ev),
+        activeElement: null,
+        documentElement: fakeEl(),
+        body: fakeEl(),
         hidden: false,
+      },
+      setTimeout: (fn: () => void) => {
+        fn();
+        return 1;
       },
       setInterval: () => 1,
       clearInterval: () => undefined,
@@ -159,11 +175,36 @@ describe("renderer parses as browser JavaScript (the D1 regression)", () => {
     expect(calls).toContain("click");
     expect(calls).toContain("change");
     expect(calls).toContain("visibilitychange");
-    // And the init chain pulled the read-only views through the bridge only.
+    // The boot chain pulls the settings, the status bar, the pending-approval
+    // view and the tool table. The remaining views load lazily when opened, so
+    // their bridge calls are asserted statically below.
+    expect(calls).toContain("getSettings");
     expect(calls).toContain("getSystemStatus");
-    expect(calls).toContain("listModels");
-    expect(calls).toContain("listWorkspaceRoots");
+    expect(calls).toContain("getSelectionPosture");
+    expect(calls).toContain("listPendingToolApprovals");
+    expect(calls).toContain("listAgentTools");
     expect(calls).not.toContain("ipcRenderer");
+  });
+
+  it("every lazily-loaded view still reaches its data through the bridge", () => {
+    const src = read(join("renderer", "renderer.js"));
+    for (const call of [
+      "listModels",
+      "listRuns",
+      "getRun",
+      "listTools",
+      "listToolAudit",
+      "listLogs",
+      "listWorkspaceRoots",
+      "pickWorkspaceRoot",
+      "listCredentialNames",
+      "getUsageTotals",
+      "getBudget",
+      "getFrozenDefaults",
+      "patchSettings",
+    ]) {
+      expect(src).toContain("api." + call);
+    }
   });
 });
 

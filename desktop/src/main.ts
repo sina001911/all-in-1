@@ -13,7 +13,7 @@
  *
  * The application does not import or require OpenCode anywhere.
  */
-import { app, BrowserWindow, ipcMain, safeStorage } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage } from "electron";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,7 @@ import { buildDesktopStack } from "./desktop-stack.ts";
 import { DesktopFacade } from "./facade.ts";
 import type { DesktopStack } from "./desktop-stack.ts";
 import { ElectronSafeStorageCredentialProvider } from "./credentials/electron-safe-storage.ts";
+import { applyPickedRoot } from "./workspace/pick.ts";
 import { SAFETY_MODES, type SafetyMode } from "../../src/safety/guard.ts";
 import { MODEL_ROLES, type ModelRole } from "../../src/registry/roles.ts";
 
@@ -153,6 +154,25 @@ function registerHandlers(facade: DesktopFacade): void {
   ipcMain.handle("all-in-1:models:list", () => facade.listModels());
   ipcMain.handle("all-in-1:models:posture", () => facade.selectionPosture());
   ipcMain.handle("all-in-1:workspace:roots", () => facade.listWorkspaceRoots());
+  // D6 folder picker. The renderer supplies NO path: it asks main to let the
+  // user choose one. Main owns the dialog, and applies the result through the
+  // sanitized settings write, so a directory can only enter the tool sandbox
+  // when the human picked it in the native dialog.
+  ipcMain.handle("all-in-1:workspace:pick", async () => {
+    const current = facade.getSettings().workspaceRoots;
+    const options: Electron.OpenDialogOptions = {
+      title: "Choose a workspace folder",
+      buttonLabel: "Add as workspace",
+      properties: ["openDirectory", "createDirectory"],
+    };
+    const focused = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const result = focused
+      ? await dialog.showOpenDialog(focused, options)
+      : await dialog.showOpenDialog(options);
+    const picked = applyPickedRoot(current, result.canceled ? undefined : result.filePaths[0]);
+    if (picked.added) facade.patchSettings({ workspaceRoots: picked.roots });
+    return picked;
+  });
   // D4 agent runtime. The renderer drives a run and learns which tools the
   // mode permits; it approves nothing here — the two channels above are the
   // only answer an approval request can receive.
@@ -181,11 +201,35 @@ function registerHandlers(facade: DesktopFacade): void {
   });
 }
 
-function createWindow(): void {
+/**
+ * Keep the OS window chrome in step with the user's stored theme (D6).
+ *
+ * `themeSource` is Electron's own vocabulary and maps one-to-one onto the
+ * desktop setting, so `system` genuinely defers to the OS. The RENDERER also
+ * applies the theme itself through CSS tokens; this call is what makes the
+ * window frame, the scrollbars and the native menus follow along too.
+ */
+function applyNativeTheme(facade: DesktopFacade): void {
+  nativeTheme.themeSource = facade.getSettings().theme;
+}
+
+/** The window background, matched to the theme so launch shows no white flash. */
+function windowBackground(facade: DesktopFacade): string {
+  const theme = facade.getSettings().theme;
+  const dark = theme === "dark" || (theme === "system" && nativeTheme.shouldUseDarkColors);
+  return dark ? "#0f141b" : "#f7f8fa";
+}
+
+function createWindow(facade: DesktopFacade): void {
   const win = new BrowserWindow({
     width: 1180,
     height: 800,
+    minWidth: 720,
+    minHeight: 520,
     title: "all_in_1",
+    // Painted before the first frame, so the window never flashes white on a
+    // dark theme (M6).
+    backgroundColor: windowBackground(facade),
     webPreferences: {
       // Hardened renderer: no Node, isolated worlds, sandboxed preload.
       nodeIntegration: false,
@@ -241,6 +285,7 @@ async function runSelfTest(facade: DesktopFacade): Promise<number> {
 function bootstrap(): void {
   const stack = buildStack();
   const facade = new DesktopFacade(stack);
+  applyNativeTheme(facade);
   registerHandlers(facade);
 
   app.on("before-quit", () => {
@@ -258,9 +303,9 @@ function bootstrap(): void {
   }
 
   app.whenReady().then(() => {
-    createWindow();
+    createWindow(facade);
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      if (BrowserWindow.getAllWindows().length === 0) createWindow(facade);
     });
   });
 }

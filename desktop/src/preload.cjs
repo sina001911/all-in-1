@@ -44,6 +44,9 @@ const api = {
   listModels: () => ipcRenderer.invoke("all-in-1:models:list"),
   getSelectionPosture: () => ipcRenderer.invoke("all-in-1:models:posture"),
   listWorkspaceRoots: () => ipcRenderer.invoke("all-in-1:workspace:roots"),
+  // D6: asks MAIN to let the user pick a folder. This takes no path argument —
+  // the renderer can only request the dialog, never name a directory.
+  pickWorkspaceRoot: () => ipcRenderer.invoke("all-in-1:workspace:pick"),
 };
 
 contextBridge.exposeInMainWorld("allInOne", api);

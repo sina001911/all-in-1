@@ -1,139 +1,555 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="system">
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'" />
   <title>all_in_1 — Desktop</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 1rem 1.25rem 4rem; color: #1c2330; background: #f7f8fa; }
-    header { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: baseline; border-bottom: 1px solid #d5dae2; padding-bottom: 0.5rem; margin-bottom: 1rem; }
-    h1 { font-size: 1.2rem; margin: 0; }
-    #version { font-size: 0.75rem; color: #6b7484; font-weight: normal; }
-    #status { font-size: 0.8rem; color: #4a5364; }
-    main { display: grid; gap: 1.25rem; }
-    section { background: #fff; border: 1px solid #dfe4ec; border-radius: 0.5rem; padding: 0.85rem 1rem; }
-    h2 { font-size: 0.95rem; margin: 0 0 0.6rem; }
-    .row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
-    label { font-size: 0.8rem; display: flex; flex-direction: column; gap: 0.2rem; }
-    label.check { flex-direction: row; align-items: center; }
-    label.block { display: flex; flex-direction: column; margin-top: 0.5rem; }
-    input, select, textarea { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.4rem; border: 1px solid #c3cad6; border-radius: 0.3rem; background: #fff; }
-    button { font: inherit; font-size: 0.8rem; padding: 0.3rem 0.8rem; border: 1px solid #b9c3d4; border-radius: 0.3rem; background: #eef1f6; cursor: pointer; }
-    button:hover:not(:disabled) { background: #e2e8f2; }
-    button:disabled { opacity: 0.45; cursor: default; }
-    table { border-collapse: collapse; width: 100%; font-size: 0.78rem; }
-    th, td { text-align: left; padding: 0.2rem 0.45rem; border-bottom: 1px solid #e8ebf1; vertical-align: top; }
-    th { color: #5b6474; font-weight: 600; }
-    tr.dim td { color: #98a1b2; }
-    pre { background: #f0f2f6; border: 1px solid #e0e4ec; border-radius: 0.4rem; padding: 0.6rem; font-size: 0.72rem; overflow-x: auto; white-space: pre-wrap; max-height: 14rem; }
-    ul { margin: 0; padding-left: 1.1rem; font-size: 0.8rem; }
-    #posture { font-size: 0.78rem; color: #4a5364; margin-bottom: 0.5rem; }
-    #agent-state { font-size: 0.8rem; margin: 0.5rem 0; font-weight: 600; }
-    #transcript { display: grid; gap: 0.4rem; }
-    .turn { font-size: 0.8rem; border-left: 3px solid #c3cad6; padding: 0.3rem 0.55rem; background: #fbfcfe; border-radius: 0 0.3rem 0.3rem 0; }
-    .turn.user { border-left-color: #7d9bd6; }
-    .turn.assistant { border-left-color: #8fb8a0; }
-    .turn.tool { border-left-color: #d6b37d; }
-    .muted { color: #6b7484; font-size: 0.74rem; }
-    .approval { border: 1px solid #e6cfa8; background: #fffaf0; border-radius: 0.4rem; padding: 0.5rem 0.65rem; margin-bottom: 0.45rem; }
-    #pending-note { font-size: 0.74rem; color: #6b7484; margin-bottom: 0.5rem; }
+    /* ===================================================================
+       DESIGN TOKENS (M1)
+       One semantic vocabulary, two palettes. Nothing below the token layer
+       hard-codes a colour, so a theme is a value swap and never a second
+       stylesheet. Dark is a neutral blue-black ground rather than pure black,
+       so panels read as recessed surfaces instead of holes.
+       =================================================================== */
+    :root {
+      --surface-0: #f7f8fa;
+      --surface-1: #ffffff;
+      --surface-2: #f0f2f6;
+      --surface-hover: #eef1f6;
+      --fg-strong: #161c26;
+      --fg: #2b3340;
+      --fg-muted: #5b6474;
+      --fg-faint: #8b94a3;
+      --border: #dde2ea;
+      --border-strong: #c3cad6;
+      --accent: #2f6fd0;
+      --accent-fg: #ffffff;
+      --accent-soft: #e8f0fc;
+      --ok: #1f7a4d;
+      --ok-soft: #e6f4ec;
+      --warn: #9a6a12;
+      --warn-soft: #fdf3e0;
+      --danger: #b3261e;
+      --danger-soft: #fbeceb;
+      --danger-fg: #ffffff;
+      --info: #2f6fd0;
+      --info-soft: #e8f0fc;
+      --shadow-1: 0 1px 2px rgba(16, 24, 40, .05);
+      --shadow-2: 0 4px 12px rgba(16, 24, 40, .08);
+      --r-sm: 4px;
+      --r-md: 6px;
+      --r-lg: 10px;
+      --s1: 4px;
+      --s2: 8px;
+      --s3: 12px;
+      --s4: 16px;
+      --s5: 20px;
+      --s6: 24px;
+      --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --font-mono: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+    }
+    [data-theme="dark"] {
+      --surface-0: #0f141b;
+      --surface-1: #151b24;
+      --surface-2: #1b222d;
+      --surface-hover: #1e2632;
+      --fg-strong: #e8edf5;
+      --fg: #c6ceda;
+      --fg-muted: #8e99a8;
+      --fg-faint: #66707e;
+      --border: #232b37;
+      --border-strong: #313b49;
+      --accent: #5b9cf0;
+      --accent-fg: #0f141b;
+      --accent-soft: #17253a;
+      --ok: #4db380;
+      --ok-soft: #14251d;
+      --warn: #d9a441;
+      --warn-soft: #2a2013;
+      --danger: #f0776b;
+      --danger-soft: #2d1a19;
+      --danger-fg: #0f141b;
+      --info: #5b9cf0;
+      --info-soft: #17253a;
+      --shadow-1: 0 1px 2px rgba(0, 0, 0, .30);
+      --shadow-2: 0 4px 14px rgba(0, 0, 0, .40);
+    }
+
+    /* ===================================================================
+       BASE
+       =================================================================== */
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--fg);
+      background: var(--surface-0);
+      -webkit-font-smoothing: antialiased;
+    }
+    h1, h2, h3 { margin: 0; color: var(--fg-strong); font-weight: 600; }
+    h1 { font-size: 15px; }
+    h2 { font-size: 14px; }
+    h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-muted); }
+    a { color: var(--accent); }
+
+    /* Focus: one visible ring everywhere, keyboard-only so mouse users do not
+       see it on click. */
+    :focus { outline: none; }
+    :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: var(--r-sm);
+    }
+
+    .visually-hidden {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+    }
+    .muted { color: var(--fg-muted); }
+    .faint { color: var(--fg-faint); }
+    .mono { font-family: var(--font-mono); font-size: 11.5px; }
+    .row { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+    .grow { flex: 1 1 auto; min-width: 0; }
+    .stack { display: grid; gap: var(--s3); }
+    .empty { color: var(--fg-faint); font-size: 12px; padding: var(--s2) 0; }
+
+    /* ===================================================================
+       SHELL (M2)
+       =================================================================== */
+    .shell { display: flex; flex-direction: column; height: 100vh; }
+    .topbar {
+      display: flex; align-items: center; gap: var(--s4);
+      padding: 0 var(--s4); height: 46px; flex: 0 0 46px;
+      background: var(--surface-1);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand { font-weight: 600; color: var(--fg-strong); letter-spacing: -.01em; }
+    .brand small { color: var(--fg-faint); font-weight: 400; margin-left: var(--s2); }
+    .posture { font-size: 11.5px; color: var(--fg-muted); }
+    .app { display: grid; grid-template-columns: 208px 1fr; flex: 1 1 auto; min-height: 0; }
+    .sidebar {
+      display: flex; flex-direction: column; min-height: 0;
+      background: var(--surface-1);
+      border-right: 1px solid var(--border);
+      padding: var(--s3) var(--s2);
+      gap: var(--s1);
+    }
+    .nav { display: grid; gap: 2px; }
+    .nav-item {
+      display: flex; align-items: center; gap: var(--s2);
+      width: 100%; text-align: left; padding: var(--s2) var(--s3);
+      font: inherit; font-size: 12.5px; color: var(--fg);
+      background: transparent; border: 1px solid transparent;
+      border-radius: var(--r-md); cursor: pointer;
+    }
+    .nav-item:hover { background: var(--surface-hover); }
+    .nav-item[aria-current="page"] {
+      background: var(--accent-soft); color: var(--accent); font-weight: 600;
+      border-color: var(--border);
+    }
+    .nav-count {
+      margin-left: auto; font-size: 10.5px; color: var(--fg-muted);
+      background: var(--surface-2); border-radius: 999px; padding: 1px 6px;
+    }
+    .sidebar-foot {
+      margin-top: auto; padding: var(--s3);
+      font-size: 11px; color: var(--fg-muted);
+      border-top: 1px solid var(--border);
+    }
+    .main { min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .view { display: none; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+    .view.active { display: flex; }
+    .view-head {
+      display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+      padding: var(--s4) var(--s5) var(--s3);
+      border-bottom: 1px solid var(--border);
+    }
+    .view-head p { margin: 0; color: var(--fg-muted); font-size: 12px; }
+    .view-body { padding: var(--s5); overflow: auto; flex: 1 1 auto; min-height: 0; }
+
+    /* ===================================================================
+       COMPONENTS
+       =================================================================== */
+    .btn {
+      font: inherit; font-size: 12.5px; font-weight: 500;
+      padding: 5px 12px; border-radius: var(--r-md);
+      border: 1px solid var(--border-strong); background: var(--surface-1);
+      color: var(--fg); cursor: pointer; white-space: nowrap;
+      transition: background .12s ease, border-color .12s ease;
+    }
+    .btn:hover:not(:disabled) { background: var(--surface-hover); }
+    .btn:disabled { opacity: .45; cursor: default; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+    .btn-primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+    .btn-danger { background: var(--danger); border-color: var(--danger); color: var(--danger-fg); }
+    .btn-danger:hover:not(:disabled) { filter: brightness(1.08); background: var(--danger); }
+    .btn-ghost { background: transparent; border-color: transparent; color: var(--fg-muted); }
+    .btn-ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--fg); }
+    .btn-sm { padding: 3px 8px; font-size: 11.5px; }
+
+    .input, .select, .textarea {
+      font: inherit; font-size: 12.5px; color: var(--fg);
+      background: var(--surface-1); border: 1px solid var(--border-strong);
+      border-radius: var(--r-md); padding: 5px 8px;
+    }
+    .textarea { resize: vertical; width: 100%; font-family: inherit; }
+    .input::placeholder, .textarea::placeholder { color: var(--fg-faint); }
+    .field { display: grid; gap: var(--s1); }
+    .field > span { font-size: 11.5px; color: var(--fg-muted); }
+    .check { display: inline-flex; align-items: center; gap: var(--s2); font-size: 12.5px; }
+
+    .seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r-md); overflow: hidden; }
+    .seg button {
+      font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer;
+      background: var(--surface-1); color: var(--fg-muted);
+      border: 0; border-right: 1px solid var(--border);
+    }
+    .seg button:last-child { border-right: 0; }
+    .seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+    .card {
+      background: var(--surface-1); border: 1px solid var(--border);
+      border-radius: var(--r-lg); box-shadow: var(--shadow-1);
+    }
+    .card-pad { padding: var(--s4); }
+    .card + .card { margin-top: var(--s3); }
+
+    .badge {
+      display: inline-block; font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+      padding: 1px 7px; border-radius: 999px; white-space: nowrap;
+      background: var(--surface-2); color: var(--fg-muted); border: 1px solid var(--border);
+    }
+    .badge-ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+    .badge-warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+    .badge-danger { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+    .badge-info { background: var(--info-soft); color: var(--info); border-color: transparent; }
+
+    table.data { border-collapse: collapse; width: 100%; font-size: 12px; }
+    table.data th, table.data td {
+      text-align: left; padding: 7px var(--s3);
+      border-bottom: 1px solid var(--border); vertical-align: top;
+    }
+    table.data th {
+      color: var(--fg-muted); font-weight: 600; font-size: 11px;
+      text-transform: uppercase; letter-spacing: .05em;
+      background: var(--surface-2); position: sticky; top: 0;
+    }
+    table.data tbody tr:hover { background: var(--surface-hover); }
+    table.data tr.selectable { cursor: pointer; }
+    table.data tr.dim td { color: var(--fg-faint); }
+
+    /* Transcript */
+    .transcript { display: grid; gap: var(--s2); align-content: start; }
+    .turn {
+      border: 1px solid var(--border); border-left-width: 3px;
+      border-radius: var(--r-md); background: var(--surface-1); padding: var(--s2) var(--s3);
+    }
+    .turn-user { border-left-color: var(--info); }
+    .turn-assistant { border-left-color: var(--ok); }
+    .turn-tool { border-left-color: var(--warn); }
+    .turn-head { display: flex; align-items: center; gap: var(--s2); font-size: 11.5px; color: var(--fg-muted); }
+    .turn-body { margin-top: 2px; color: var(--fg); white-space: pre-wrap; word-break: break-word; }
+    .excerpt {
+      margin-top: var(--s2); padding: var(--s2); background: var(--surface-2);
+      border: 1px solid var(--border); border-radius: var(--r-sm);
+      font-family: var(--font-mono); font-size: 11.5px; color: var(--fg);
+      white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto;
+    }
+    details > summary { cursor: pointer; color: var(--fg-muted); font-size: 11.5px; list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+    details > summary::before { content: "▸ "; }
+    details[open] > summary::before { content: "▾ "; }
+
+    /* Approvals */
+    .approval {
+      border: 1px solid var(--warn); border-left-width: 3px;
+      background: var(--warn-soft); border-radius: var(--r-md); padding: var(--s3);
+    }
+    .approval + .approval { margin-top: var(--s2); }
+    .approval-note { font-size: 11.5px; color: var(--warn); font-weight: 600; }
+
+    /* Feedback */
+    .skeleton {
+      height: 12px; border-radius: var(--r-sm); background: var(--surface-2);
+      animation: pulse 1.3s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+    .error-panel {
+      border: 1px solid var(--danger); background: var(--danger-soft);
+      border-radius: var(--r-md); padding: var(--s3);
+    }
+    .error-panel code { font-family: var(--font-mono); font-size: 11.5px; color: var(--danger); font-weight: 600; }
+    .toasts { position: fixed; right: var(--s5); bottom: var(--s5); display: grid; gap: var(--s2); z-index: 40; }
+    .toast {
+      background: var(--surface-1); border: 1px solid var(--border-strong);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--r-md); box-shadow: var(--shadow-2);
+      padding: var(--s2) var(--s3); font-size: 12px; max-width: 380px;
+    }
+    .toast-ok { border-left-color: var(--ok); }
+    .toast-warn { border-left-color: var(--warn); }
+    .toast-danger { border-left-color: var(--danger); }
+
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(8, 12, 18, .45);
+      display: none; align-items: center; justify-content: center; z-index: 50; padding: var(--s5);
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: var(--surface-1); border: 1px solid var(--border-strong);
+      border-radius: var(--r-lg); box-shadow: var(--shadow-2);
+      width: min(460px, 100%); padding: var(--s5);
+    }
+    .modal h2 { margin-bottom: var(--s2); }
+
+    .tabs { display: flex; gap: var(--s1); border-bottom: 1px solid var(--border); margin-bottom: var(--s3); }
+    .tabs button {
+      font: inherit; font-size: 12.5px; padding: var(--s2) var(--s3); cursor: pointer;
+      background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted);
+    }
+    .tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+    .composer { display: grid; gap: var(--s2); }
+    .kv { display: grid; grid-template-columns: 160px 1fr; gap: var(--s2) var(--s3); font-size: 12px; }
+    .kv dt { color: var(--fg-muted); }
+    .kv dd { margin: 0; }
+    pre.code {
+      background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md);
+      padding: var(--s3); font-family: var(--font-mono); font-size: 11.5px;
+      overflow: auto; max-height: 320px; white-space: pre-wrap; word-break: break-word; margin: 0;
+    }
+
+    /* ===================================================================
+       RESPONSIVE + MOTION (M1)
+       =================================================================== */
+    @media (max-width: 900px) {
+      .app { grid-template-columns: 56px 1fr; }
+      .nav-label, .nav-count, .sidebar-foot, .brand small { display: none; }
+      .nav-item { justify-content: center; padding: var(--s2); }
+      .kv { grid-template-columns: 1fr; gap: var(--s1) 0; }
+    }
+    @media (max-width: 620px) {
+      .topbar { flex-wrap: wrap; height: auto; flex-basis: auto; padding: var(--s2) var(--s3); }
+      .view-body { padding: var(--s3); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
   </style>
 </head>
 <body>
-  <header>
-    <h1>all_in_1 <span id="version">D5 desktop UI</span></h1>
-    <div id="status">loading…</div>
-  </header>
-  <main>
-    <section id="sec-models">
-      <h2>Models &amp; providers (read-only)</h2>
-      <div id="posture">…</div>
-      <table id="models">
-        <thead>
-          <tr><th>model</th><th>provider</th><th>locality</th><th>cost</th><th>status</th><th>tools</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
-    <section id="sec-agent">
-      <h2>Agent console</h2>
-      <div class="row">
-        <label>Mode
-          <select id="agent-mode">
-            <option value="INSPECT">INSPECT</option>
-            <option value="SUGGEST">SUGGEST</option>
-            <option value="BUILD">BUILD</option>
-          </select>
-        </label>
-        <label>Run id <input id="agent-run-id" type="text" placeholder="(blank: new run)" /></label>
-        <label class="check"><input id="agent-auto" type="checkbox" /> --auto (bounded)</label>
-        <button id="agent-run">Run turn</button>
-        <button id="agent-cancel" disabled>Cancel</button>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">all_in_1 <small>D6</small></div>
+      <div class="posture grow" id="posture" aria-live="polite">loading…</div>
+      <div class="seg" role="group" aria-label="Colour theme">
+        <button type="button" id="theme-light" aria-pressed="false">Light</button>
+        <button type="button" id="theme-dark" aria-pressed="false">Dark</button>
+        <button type="button" id="theme-system" aria-pressed="true">System</button>
       </div>
-      <label class="block">Prompt
-        <textarea id="agent-prompt" rows="3" placeholder="ask the agent…"></textarea>
-      </label>
-      <div id="agent-state">no run yet</div>
-      <div id="transcript"></div>
-    </section>
+    </header>
 
-    <section id="sec-tools">
-      <h2>Tools visible in <span id="tools-mode">this mode</span></h2>
-      <table id="tools">
-        <thead>
-          <tr><th>tool</th><th>permission</th><th>approval</th><th>description</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
+    <div class="app">
+      <aside class="sidebar">
+        <nav class="nav" id="nav" aria-label="Primary">
+          <button type="button" class="nav-item" data-view="agent" aria-current="page"><span class="nav-label">Agent</span></button>
+          <button type="button" class="nav-item" data-view="runs"><span class="nav-label">Runs</span></button>
+          <button type="button" class="nav-item" data-view="tools"><span class="nav-label">Tools</span></button>
+          <button type="button" class="nav-item" data-view="approvals"><span class="nav-label">Approvals</span><span class="nav-count" id="nav-approvals" hidden>0</span></button>
+          <button type="button" class="nav-item" data-view="audit"><span class="nav-label">Audit</span></button>
+          <button type="button" class="nav-item" data-view="models"><span class="nav-label">Models</span></button>
+          <button type="button" class="nav-item" data-view="workspace"><span class="nav-label">Workspace</span></button>
+          <button type="button" class="nav-item" data-view="settings"><span class="nav-label">Settings</span></button>
+        </nav>
+        <div class="sidebar-foot" id="sidebar-foot"></div>
+      </aside>
 
-    <section id="sec-approvals">
-      <h2>Pending tool approvals</h2>
-      <div id="pending-note">the model may not approve its own request — only these buttons can</div>
-      <div id="pending"></div>
-    </section>
+      <main class="main">
+        <!-- AGENT ------------------------------------------------------- -->
+        <section class="view active" id="view-agent" aria-labelledby="h-agent">
+          <div class="view-head">
+            <h2 id="h-agent">Agent</h2>
+            <p class="grow" id="mode-help">—</p>
+            <div class="seg" role="group" aria-label="Safety mode">
+              <button type="button" id="mode-INSPECT" aria-pressed="true">INSPECT</button>
+              <button type="button" id="mode-SUGGEST" aria-pressed="false">SUGGEST</button>
+              <button type="button" id="mode-BUILD" aria-pressed="false">BUILD</button>
+            </div>
+            <label class="check"><input type="checkbox" id="agent-auto" /> auto (bounded)</label>
+          </div>
+          <div class="view-body stack">
+            <div class="row">
+              <label class="field"><span>Run id — reuse to continue</span>
+                <input class="input" type="text" id="agent-run-id" placeholder="(blank starts a new run)" size="28" />
+              </label>
+              <div class="grow"></div>
+              <span id="agent-state" aria-live="polite"></span>
+              <button type="button" class="btn" id="agent-cancel" disabled>Cancel</button>
+            </div>
+            <div class="composer">
+              <label class="visually-hidden" for="agent-prompt">Prompt</label>
+              <textarea class="textarea" id="agent-prompt" rows="3" placeholder="Ask the agent…  (Enter to send, Shift+Enter for a new line)"></textarea>
+              <div class="row">
+                <button type="button" class="btn btn-primary" id="agent-run">Send</button>
+                <span class="faint" id="agent-hint"></span>
+              </div>
+            </div>
+            <div class="transcript" id="transcript" role="log" aria-live="polite" aria-label="Conversation transcript"></div>
+          </div>
+        </section>
 
-    <section id="sec-workspace">
-      <h2>Workspace boundary (read-only)</h2>
-      <ul id="roots"><li>…</li></ul>
-    </section>
+        <!-- RUNS -------------------------------------------------------- -->
+        <section class="view" id="view-runs" aria-labelledby="h-runs">
+          <div class="view-head"><h2 id="h-runs">Runs</h2><p class="grow">Every recorded run, newest last.</p></div>
+          <div class="view-body stack">
+            <div class="card card-pad">
+              <h3>New diagnostic (full 7-gate pipeline)</h3>
+              <div class="row" style="margin-top:var(--s3)">
+                <label class="field"><span>Mode</span>
+                  <select class="select" id="diag-mode">
+                    <option value="INSPECT">INSPECT</option>
+                    <option value="SUGGEST">SUGGEST</option>
+                    <option value="BUILD">BUILD</option>
+                  </select>
+                </label>
+                <label class="field grow"><span>Subject</span>
+                  <input class="input" type="text" id="diag-subject" value="the authentication module" />
+                </label>
+                <label class="check"><input type="checkbox" id="diag-auto" /> auto (bounded)</label>
+                <button type="button" class="btn btn-primary" id="diag-run">Run</button>
+                <button type="button" class="btn" id="diag-cancel" disabled>Cancel</button>
+              </div>
+              <div id="diag-output" class="excerpt" style="margin-top:var(--s3)">no diagnostic run yet</div>
+            </div>
+            <div id="runs-table"></div>
+            <div id="runs-detail"></div>
+          </div>
+        </section>
 
-    <section>
-      <h2>Run a diagnostic (full 7-gate pipeline)</h2>
-      <div class="row">
-        <label>Mode
-          <select id="mode">
-            <option value="INSPECT">INSPECT</option>
-            <option value="SUGGEST">SUGGEST</option>
-            <option value="BUILD">BUILD</option>
-          </select>
-        </label>
-        <label>Subject <input id="subject" type="text" value="the authentication module" /></label>
-        <label class="check"><input id="auto" type="checkbox" /> --auto (bounded)</label>
-        <button id="run">Run</button>
-        <button id="cancel" disabled>Cancel</button>
+        <!-- TOOLS ------------------------------------------------------- -->
+        <section class="view" id="view-tools" aria-labelledby="h-tools">
+          <div class="view-head"><h2 id="h-tools">Tools</h2><p class="grow">The catalogue beside what the current mode actually exposes.</p></div>
+          <div class="view-body stack">
+            <div class="card card-pad"><h3>Visible in <span id="tools-mode">INSPECT</span></h3><div id="tools-visible" class="stack" style="margin-top:var(--s3)"></div></div>
+            <div class="card card-pad"><h3>Full catalogue</h3><div id="tools-all" class="stack" style="margin-top:var(--s3)"></div></div>
+          </div>
+        </section>
+
+        <!-- APPROVALS --------------------------------------------------- -->
+        <section class="view" id="view-approvals" aria-labelledby="h-approvals">
+          <div class="view-head">
+            <h2 id="h-approvals">Approvals</h2>
+            <p class="grow">A tool call pauses here. The model's justification is evidence for your decision — never a substitute for it.</p>
+          </div>
+          <div class="view-body stack">
+            <div id="approvals-pending" aria-live="polite" aria-label="Pending tool approvals"></div>
+            <div class="card card-pad"><h3>Resolved</h3><div id="approvals-resolved" class="stack" style="margin-top:var(--s3)"></div></div>
+          </div>
+        </section>
+
+        <!-- AUDIT -------------------------------------------------------- -->
+        <section class="view" id="view-audit" aria-labelledby="h-audit">
+          <div class="view-head">
+            <h2 id="h-audit">Audit</h2>
+            <p class="grow">Redacted. File bodies, command output and secrets are never recorded.</p>
+            <label class="field"><span>Filter by run id</span><input class="input" type="text" id="audit-run" placeholder="(all runs)" size="24" /></label>
+          </div>
+          <div class="view-body stack">
+            <div class="tabs" role="tablist" aria-label="Audit sources">
+              <button type="button" role="tab" id="tab-tool" aria-selected="true" aria-controls="pane-tool">Tool audit</button>
+              <button type="button" role="tab" id="tab-log" aria-selected="false" aria-controls="pane-log">Application log</button>
+            </div>
+            <div role="tabpanel" id="pane-tool" aria-labelledby="tab-tool"></div>
+            <div role="tabpanel" id="pane-log" aria-labelledby="tab-log" hidden></div>
+          </div>
+        </section>
+
+        <!-- MODELS ------------------------------------------------------ -->
+        <section class="view" id="view-models" aria-labelledby="h-models">
+          <div class="view-head"><h2 id="h-models">Models</h2><p class="grow">Informational. The frozen posture below is not adjustable from the UI.</p></div>
+          <div class="view-body stack">
+            <div class="card card-pad" id="models-posture"></div>
+            <div class="card card-pad"><h3>Catalogue</h3><div id="models-table" style="margin-top:var(--s3)"></div></div>
+          </div>
+        </section>
+
+        <!-- WORKSPACE --------------------------------------------------- -->
+        <section class="view" id="view-workspace" aria-labelledby="h-workspace">
+          <div class="view-head">
+            <h2 id="h-workspace">Workspace</h2>
+            <p class="grow">The only directories the tools may touch. Anything outside them is refused.</p>
+            <button type="button" class="btn btn-primary" id="workspace-add">Add folder…</button>
+          </div>
+          <div class="view-body stack"><div id="workspace-roots"></div></div>
+        </section>
+
+        <!-- SETTINGS ---------------------------------------------------- -->
+        <section class="view" id="view-settings" aria-labelledby="h-settings">
+          <div class="view-head"><h2 id="h-settings">Settings</h2><p class="grow">Frozen defaults are read-only and cannot be changed here.</p></div>
+          <div class="view-body stack">
+            <div class="card card-pad">
+              <h3>Appearance &amp; behaviour</h3>
+              <div class="row" style="margin-top:var(--s3)">
+                <label class="field"><span>Theme</span>
+                  <select class="select" id="settings-theme">
+                    <option value="system">System</option>
+                    <option value="light">Light</option>
+                    <option value="dark">Dark</option>
+                  </select>
+                </label>
+                <label class="field"><span>Default mode</span>
+                  <select class="select" id="settings-mode">
+                    <option value="INSPECT">INSPECT</option>
+                    <option value="SUGGEST">SUGGEST</option>
+                    <option value="BUILD">BUILD</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div class="card card-pad">
+              <h3>Credentials</h3>
+              <p class="muted" style="margin:var(--s2) 0">Values are write-only: they are encrypted by the OS and can never be read back here.</p>
+              <div id="settings-credentials" class="stack"></div>
+            </div>
+            <div class="card card-pad">
+              <h3>Usage &amp; budget</h3>
+              <div class="stack" style="margin-top:var(--s3)">
+                <div id="settings-usage"></div>
+                <div id="settings-budget"></div>
+              </div>
+            </div>
+            <div class="card card-pad">
+              <h3>Frozen defaults (read-only)</h3>
+              <div id="settings-frozen" style="margin-top:var(--s3)"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" role="status" aria-live="polite" aria-label="Notifications"></div>
+
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" id="modal">
+      <h2 id="modal-title">Dialog</h2>
+      <div id="modal-body" class="stack"></div>
+      <div class="row" style="justify-content:flex-end; margin-top:var(--s4)">
+        <button type="button" class="btn" id="modal-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="modal-confirm">Confirm</button>
       </div>
-      <pre id="output">no run yet</pre>
-    </section>
+    </div>
+  </div>
 
-    <section>
-      <h2>Approvals</h2>
-      <pre id="approvals">…</pre>
-    </section>
-    <section>
-      <h2>Usage</h2>
-      <pre id="usage">…</pre>
-    </section>
-    <section>
-      <h2>Credentials (names only — values are never returned)</h2>
-      <pre id="credentials">…</pre>
-    </section>
-    <section>
-      <h2>Audit log (redacted)</h2>
-      <pre id="logs">…</pre>
-    </section>
-  </main>
   <script src="renderer.js"></script>
 </body>
 </html>
