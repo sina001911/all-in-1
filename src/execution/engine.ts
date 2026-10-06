@@ -136,6 +136,7 @@ export class ExecutionEngine {
           i.kind === "text" ? { kind: "text", text: i.text } : { kind: "image", artifactId: i.artifactId },
         ) ?? [],
       structuredOutputSchema: request.structuredOutput ? {} : undefined,
+      tools: request.toolDeclarations,
     };
     adapter.validateInvoke(invokeRequest, this.opts.catalog);
 

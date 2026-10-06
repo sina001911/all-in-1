@@ -147,6 +147,32 @@ function registerHandlers(facade: DesktopFacade): void {
     if (typeof id !== "string") throw new Error("approval id must be a string");
     return facade.denyTool(id, typeof reason === "string" ? reason : undefined);
   });
+  // D4 agent runtime. The renderer drives a run and learns which tools the
+  // mode permits; it approves nothing here — the two channels above are the
+  // only answer an approval request can receive.
+  ipcMain.handle("all-in-1:agent:tools", (_e, mode: unknown) => {
+    if (mode !== "INSPECT" && mode !== "SUGGEST" && mode !== "BUILD") {
+      throw new Error("mode must be INSPECT, SUGGEST, or BUILD");
+    }
+    return facade.listAgentTools(mode);
+  });
+  ipcMain.handle("all-in-1:agent:run", (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("Invalid agent request");
+    const req = raw as Record<string, unknown>;
+    if (typeof req.runId !== "string") throw new Error("runId must be a string");
+    if (typeof req.prompt !== "string") throw new Error("prompt must be a string");
+    if (req.mode !== "INSPECT" && req.mode !== "SUGGEST" && req.mode !== "BUILD") {
+      throw new Error("mode must be INSPECT, SUGGEST, or BUILD");
+    }
+    return facade.runAgent({
+      runId: req.runId,
+      prompt: req.prompt,
+      mode: req.mode,
+      auto: req.auto && typeof req.auto === "object" ? (req.auto as Record<string, unknown>) : undefined,
+      tools: Array.isArray(req.tools) ? (req.tools as string[]).filter((t) => typeof t === "string") : undefined,
+      timeoutMs: typeof req.timeoutMs === "number" ? req.timeoutMs : undefined,
+    });
+  });
 }
 
 function createWindow(): void {

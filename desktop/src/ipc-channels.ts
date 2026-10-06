@@ -39,6 +39,9 @@ export const IPC_CHANNELS = [
   "all-in-1:tools:approvals:pending",
   "all-in-1:tools:approve",
   "all-in-1:tools:deny",
+  // D4 agent runtime
+  "all-in-1:agent:tools",
+  "all-in-1:agent:run",
 ] as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[number];

@@ -35,6 +35,11 @@ export function buildSpecialistStack(opts: {
   approvals?: ApprovalStore;
   /** Inject a pre-built budget ledger (e.g. a persistent one). */
   budget?: BudgetLedger;
+  /**
+   * Register the deterministic tool-capable agent model (D4). Opt-in; the
+   * default stack is unchanged.
+   */
+  agentModel?: boolean;
 } = {}): SpecialistStack {
   const stack = buildExecutionStack(opts);
   const sink = opts.logSink ?? new MemorySink();

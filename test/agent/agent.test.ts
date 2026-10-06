@@ -258,10 +258,12 @@ describe("bounds", () => {
     const out = await agent.run({ runId: "r15", prompt: "now do the second thing", mode: "INSPECT" });
     expect(out.turns).toBe(2);
     expect(out.pausedForHuman).toBe(false);
-    // The continuation prompt reached the model as the human's instruction.
+    // The continuation prompt reached the model as the current instruction.
     const last = gateway.requests[gateway.requests.length - 1];
-    const userEvents = last.history.filter((e) => e.kind === "user");
-    expect(userEvents[userEvents.length - 1]).toMatchObject({ kind: "user", text: "now do the second thing" });
+    expect(last.prompt).toBe("now do the second thing");
+    // And the first turn's assistant answer and tool result are still in view.
+    expect(last.history.filter((e) => e.kind === "assistant")).toHaveLength(1);
+    expect(last.history.filter((e) => e.kind === "tool")).toHaveLength(1);
   });
 
   it("a turn with no tool calls is the final answer", async () => {

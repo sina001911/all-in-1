@@ -64,6 +64,8 @@ interface RunState {
   readonly visible: readonly ToolSchema[];
   readonly history: TurnEvent[];
   readonly outcomes: ToolCallOutcome[];
+  /** The CURRENT instruction, refreshed on every `run` call. */
+  prompt: string;
   /** Turns fully completed. */
   turn: number;
   done: boolean;
@@ -110,9 +112,13 @@ export class AgentRuntime {
       }
       this.runs.set(request.runId, run);
     } else {
-      // A continuation: the caller's prompt is the human's next instruction.
-      run.history.push({ kind: "user", text: request.prompt });
+      // A continuation: the caller's prompt becomes the current instruction.
+      run.prompt = request.prompt;
     }
+    // NOTE: the prompt is NOT pushed into history. It is the CURRENT
+    // instruction, handed to the gateway on this turn via `request.prompt`;
+    // history records only what the model and the tools have already done, so
+    // a continuation steers the run without being mistaken for a past turn.
 
     return this.advance(run);
   }
@@ -136,7 +142,8 @@ export class AgentRuntime {
       auto,
       state: { iteration: 0, edits: 0, dryRunCompleted: false, escalated: false },
       visible,
-      history: [{ kind: "user", text: request.prompt }],
+      history: [],
+      prompt: request.prompt,
       outcomes: [],
       turn: 0,
       done: false,
@@ -184,7 +191,7 @@ export class AgentRuntime {
       // 2. ASK THE MODEL. The gateway executes nothing; it returns wants.
       const gatewayRequest: GatewayTurnRequest = {
         runId: req.runId,
-        prompt: req.prompt,
+        prompt: run.prompt,
         mode: req.mode,
         history: [...run.history],
         tools: run.visible,

@@ -19,6 +19,8 @@
 import { buildSpecialistStack, type SpecialistStack } from "../../src/specialists/stack.ts";
 import { FROZEN_DEFAULTS } from "../../src/config/schema.ts";
 import { buildToolRuntime, type ToolRuntime } from "../../src/tools/index.ts";
+import { buildAgentRuntime, type AgentRuntime } from "../../src/agent/index.ts";
+import { ProviderModelGateway } from "../../src/agent/provider-gateway.ts";
 import { PersistentApprovalStore } from "./persistence/persistent-approval-store.ts";
 import { PersistentBudgetLedger } from "./persistence/persistent-budget-ledger.ts";
 import { FileRunStore } from "./persistence/run-store.ts";
@@ -55,6 +57,8 @@ export interface DesktopStack {
   readonly tools: ToolRuntime;
   readonly toolApprover: InteractiveToolApprover;
   readonly workspaceRoots: DesktopWorkspaceRoots;
+  readonly agent: AgentRuntime;
+  readonly agentGateway: ProviderModelGateway;
   readonly frozenDefaults: typeof FROZEN_DEFAULTS;
 }
 
@@ -94,6 +98,11 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
     approvals,
     budget,
     logSink: new LogStoreSink(logStore),
+    // The desktop runs an agent loop, which needs a tool-capable model. This
+    // opts in the deterministic local agent model ONLY — the remote catalogue
+    // stays empty, egress stays deny-all, and the budget stays 0, so under the
+    // frozen defaults the agent can only ever reach a local, zero-cost model.
+    agentModel: true,
   });
 
   // D2: the privileged tool runtime. Its workspace roots are the directories
@@ -107,6 +116,13 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
     approver: toolApprover,
     audit: new FileToolAuditStore(new JsonlAppendStore(paths.root, "tool-audit.jsonl")),
   });
+
+  // D4: the agent runtime. The gateway routes every turn through the execution
+  // engine, hence through the frozen gates; the agent holds the tool runtime,
+  // never the approver, so a tool request from the model can only be settled
+  // by the human behind `toolApprover`.
+  const agentGateway = new ProviderModelGateway({ engine: core.stack.engine });
+  const agent = buildAgentRuntime({ tools, gateway: agentGateway });
 
   return {
     core,
@@ -122,6 +138,8 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
     tools,
     toolApprover,
     workspaceRoots,
+    agent,
+    agentGateway,
     frozenDefaults: FROZEN_DEFAULTS,
   };
 }

@@ -34,3 +34,4 @@ export * from "./types.ts";
 export * from "./loop.ts";
 export * from "./visibility.ts";
 export * from "./scripted-gateway.ts";
+export * from "./provider-gateway.ts";

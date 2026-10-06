@@ -14,6 +14,7 @@
  * `toPricing()`.
  */
 import type { CostClass, Modality } from "../capabilities/types.ts";
+import type { ProviderToolDeclaration } from "../execution/types.ts";
 
 export const MODEL_STATUS = ["active", "beta", "deprecated", "disabled"] as const;
 export type ModelStatus = (typeof MODEL_STATUS)[number];
@@ -145,6 +146,12 @@ export interface SelectionRequest {
   readonly structuredOutput?: boolean;
   readonly streaming?: boolean;
   readonly minContext?: number;
+  /**
+   * The tool declarations to hand the model (D4). Distinct from `tools`, which
+   * is the SELECTION requirement that the model support tool calling. The
+   * engine forwards these declarations to the adapter untouched.
+   */
+  readonly toolDeclarations?: readonly ProviderToolDeclaration[];
   /** Explicit user/project preference, honoured first when valid. */
   readonly preference?: ModelRef;
   readonly excludeModelIds?: readonly string[];

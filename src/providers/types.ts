@@ -18,7 +18,7 @@
  */
 import type { Locality } from "../models/types.ts";
 import type { ModelDescriptor } from "../models/types.ts";
-import type { ProviderInvokeResult } from "../execution/types.ts";
+import type { ProviderInvokeResult, ProviderToolDeclaration } from "../execution/types.ts";
 import { AllInOneError } from "../errors.ts";
 
 export const PROVIDER_PROTOCOLS = [
@@ -53,6 +53,12 @@ export interface ProviderInvokeRequest {
     | { readonly kind: "image"; readonly artifactId: string }
   >;
   readonly structuredOutputSchema?: object;
+  /**
+   * The tools the model may call (D4), already filtered to what the caller
+   * permits. An adapter passes these to the model so it can shape a request;
+   * it never executes or approves one.
+   */
+  readonly tools?: readonly ProviderToolDeclaration[];
 }
 
 export interface ProviderAdapter extends ProviderAdapterOptions {

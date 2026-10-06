@@ -13,7 +13,7 @@ import { registerBaselineCapabilities } from "../capabilities/capabilities.ts";
 import { ApprovalStore } from "../registry/approvals.ts";
 import { BudgetLedger } from "../registry/budget.ts";
 import { ExecutionEngine } from "./engine.ts";
-import { LocalAdapter, registerLocalModels } from "./local-adapter.ts";
+import { LocalAdapter, registerLocalModels, registerLocalAgentModel } from "./local-adapter.ts";
 import { AdapterRegistry as ProviderAdapterRegistry } from "./adapter-registry.ts";
 import { DEFAULT_EGRESS_POLICY, allowHost } from "./egress.ts";
 
@@ -47,9 +47,17 @@ export function buildExecutionStack(opts: {
    * disk). When omitted an in-memory ledger is created, exactly as before.
    */
   budget?: BudgetLedger;
+  /**
+   * Register the deterministic tool-capable agent model (D4). Opt-in: the
+   * default catalogue stays exactly as it was so the stack's inertness is
+   * unchanged. The desktop opts in because its agent loop needs a model that
+   * declares tool calling.
+   */
+  agentModel?: boolean;
 } = {}): ExecutionStack {
   const catalog = new ModelCatalog();
   registerLocalModels(catalog);
+  if (opts.agentModel) registerLocalAgentModel(catalog);
   const capabilities = new CapabilityRegistry();
   registerBaselineCapabilities(capabilities);
   const chains = new PriorityChains(catalog);

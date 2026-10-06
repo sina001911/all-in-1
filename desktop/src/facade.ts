@@ -31,6 +31,8 @@ import type {
 import type { ToolRequest, ToolResult } from "../../src/tools/types.ts";
 import type { ToolAuditRecord } from "../../src/tools/audit.ts";
 import type { ApprovalRecord as ToolApprovalEntry } from "./tools/approver.ts";
+import type { AgentRequest, AgentResult } from "../../src/agent/index.ts";
+import { toolsVisibleInMode } from "../../src/agent/index.ts";
 
 export interface DiagnosticRequest {
   readonly mode: SafetyMode;
@@ -390,6 +392,27 @@ export class DesktopFacade {
   /** Deny every pending request; used when a run is abandoned or on shutdown. */
   abandonPendingApprovals(reason: string): void {
     this.stack.toolApprover.denyAll(reason);
+  }
+
+  // ---- agent runtime (D4) -------------------------------------------
+  //
+  // The loop that connects the model to the tools. The facade exposes the run
+  // and the tools the current mode permits; it exposes nothing that could
+  // approve a tool request — that remains the two approval channels above.
+
+  /** The tools the model may call in this mode, with their privilege class. */
+  listAgentTools(mode: SafetyMode): ReadonlyArray<{ name: string; description: string; permission: string; requiresApproval: boolean }> {
+    return toolsVisibleInMode(this.stack.tools.registry, this.stack.tools.policy, mode).map((schema) => ({
+      name: schema.name,
+      description: schema.description,
+      permission: schema.permission,
+      requiresApproval: this.stack.tools.policy.requiresApproval(schema),
+    }));
+  }
+
+  /** Run the agent as far as the bounds permit; resumable on the same runId. */
+  async runAgent(request: AgentRequest): Promise<AgentResult> {
+    return this.stack.agent.run(request);
   }
 }
 

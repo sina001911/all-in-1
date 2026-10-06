@@ -37,6 +37,9 @@ const api = {
   listPendingToolApprovals: () => ipcRenderer.invoke("all-in-1:tools:approvals:pending"),
   approveTool: (id, note) => ipcRenderer.invoke("all-in-1:tools:approve", id, note),
   denyTool: (id, reason) => ipcRenderer.invoke("all-in-1:tools:deny", id, reason),
+  // D4 agent
+  listAgentTools: (mode) => ipcRenderer.invoke("all-in-1:agent:tools", mode),
+  runAgent: (request) => ipcRenderer.invoke("all-in-1:agent:run", request),
 };
 
 contextBridge.exposeInMainWorld("allInOne", api);
