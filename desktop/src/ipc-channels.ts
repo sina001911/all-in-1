@@ -42,6 +42,10 @@ export const IPC_CHANNELS = [
   // D4 agent runtime
   "all-in-1:agent:tools",
   "all-in-1:agent:run",
+  // D5 read-only model/provider and workspace views
+  "all-in-1:models:list",
+  "all-in-1:models:posture",
+  "all-in-1:workspace:roots",
 ] as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[number];

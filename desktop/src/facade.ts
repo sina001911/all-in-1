@@ -410,9 +410,88 @@ export class DesktopFacade {
     }));
   }
 
-  /** Run the agent as far as the bounds permit; resumable on the same runId. */
+  /**
+   * Run the agent as far as the bounds permit; resumable on the same runId.
+   *
+   * The run's abort signal is injected here, not supplied by the caller: an
+   * `AbortSignal` is not serializable across IPC, and the ownership matters —
+   * the desktop owns the run's lifetime (the same hub the diagnostic path
+   * uses), so `cancelRun(runId)` ends an agent run exactly as it ends a
+   * workflow. A pending approval the run raised is released by the pipeline,
+   * never silently approved.
+   */
   async runAgent(request: AgentRequest): Promise<AgentResult> {
-    return this.stack.agent.run(request);
+    const signal = this.stack.cancellation.signalFor(request.runId);
+    const settled = await this.stack.agent.run({ ...request, signal });
+    this.stack.cancellation.release(request.runId);
+
+    // A cancelled run leaves the approval it raised DANGLING: the executor stops
+    // waiting (its `raceAbort` rejects), but the request is still recorded as
+    // PENDING and nothing will ever answer it — a leak and a lie in the UI, which
+    // would keep showing a decision the run can no longer use. Disposal is a
+    // denial, never an approval, so the facade denies whatever THIS run left
+    // open. Another run's pending requests are untouched.
+    if (signal.aborted) {
+      for (const pending of this.stack.toolApprover.listPending()) {
+        if (pending.runId === request.runId) {
+          this.stack.toolApprover.deny(pending.id, "run cancelled by the caller");
+        }
+      }
+    }
+    return settled;
+  }
+
+  // ---- models & providers (D5) --------------------------------------
+  //
+  // Read-only catalogue data for the UI. The descriptor is provider-agnostic
+  // and contains no secret material; the UI shows it so the human can see
+  // WHICH models exist and WHY only the local ones are reachable under the
+  // frozen posture.
+
+  /**
+   * The models the catalogue holds, as a plain JSON-safe list for the
+   * renderer, with the frozen posture that bounds selection alongside.
+   */
+  listModels(): ReadonlyArray<{
+    readonly id: string;
+    readonly provider: string;
+    readonly displayName: string;
+    readonly locality: string;
+    readonly costClass: string;
+    readonly status: string;
+    readonly enabled: boolean;
+    readonly available: boolean;
+    readonly fixed: boolean;
+    readonly tools: boolean;
+  }> {
+    return this.stack.core.stack.catalog.snapshot().map((m) => ({
+      id: m.id,
+      provider: m.provider,
+      displayName: m.displayName,
+      locality: m.locality,
+      costClass: m.pricing.costClass,
+      status: m.status,
+      enabled: m.enabled,
+      available: m.available,
+      fixed: Boolean(m.fixed),
+      tools: m.tools,
+    }));
+  }
+
+  /** Why selection is bounded the way it is: the frozen posture, read-only. */
+  selectionPosture(): {
+    readonly egress: string;
+    readonly budgetUsd: number;
+    readonly policy: string;
+    readonly note: string;
+  } {
+    return {
+      egress: this.stack.core.stack.egress.kind,
+      budgetUsd: this.stack.budget.snapshot().budgetUsd,
+      policy: "FREE_ONLY",
+      note:
+        "Only local, zero-cost models are reachable: egress is deny-all, the budget is 0, and the cost policy is FREE_ONLY. No credential is read and no host is contacted.",
+    };
   }
 }
 

@@ -40,6 +40,10 @@ const api = {
   // D4 agent
   listAgentTools: (mode) => ipcRenderer.invoke("all-in-1:agent:tools", mode),
   runAgent: (request) => ipcRenderer.invoke("all-in-1:agent:run", request),
+  // D5 read-only views
+  listModels: () => ipcRenderer.invoke("all-in-1:models:list"),
+  getSelectionPosture: () => ipcRenderer.invoke("all-in-1:models:posture"),
+  listWorkspaceRoots: () => ipcRenderer.invoke("all-in-1:workspace:roots"),
 };
 
 contextBridge.exposeInMainWorld("allInOne", api);

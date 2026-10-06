@@ -4,17 +4,101 @@
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'" />
   <title>all_in_1 — Desktop</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem 1.25rem 4rem; color: #1c2330; background: #f7f8fa; }
+    header { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: baseline; border-bottom: 1px solid #d5dae2; padding-bottom: 0.5rem; margin-bottom: 1rem; }
+    h1 { font-size: 1.2rem; margin: 0; }
+    #version { font-size: 0.75rem; color: #6b7484; font-weight: normal; }
+    #status { font-size: 0.8rem; color: #4a5364; }
+    main { display: grid; gap: 1.25rem; }
+    section { background: #fff; border: 1px solid #dfe4ec; border-radius: 0.5rem; padding: 0.85rem 1rem; }
+    h2 { font-size: 0.95rem; margin: 0 0 0.6rem; }
+    .row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+    label { font-size: 0.8rem; display: flex; flex-direction: column; gap: 0.2rem; }
+    label.check { flex-direction: row; align-items: center; }
+    label.block { display: flex; flex-direction: column; margin-top: 0.5rem; }
+    input, select, textarea { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.4rem; border: 1px solid #c3cad6; border-radius: 0.3rem; background: #fff; }
+    button { font: inherit; font-size: 0.8rem; padding: 0.3rem 0.8rem; border: 1px solid #b9c3d4; border-radius: 0.3rem; background: #eef1f6; cursor: pointer; }
+    button:hover:not(:disabled) { background: #e2e8f2; }
+    button:disabled { opacity: 0.45; cursor: default; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.78rem; }
+    th, td { text-align: left; padding: 0.2rem 0.45rem; border-bottom: 1px solid #e8ebf1; vertical-align: top; }
+    th { color: #5b6474; font-weight: 600; }
+    tr.dim td { color: #98a1b2; }
+    pre { background: #f0f2f6; border: 1px solid #e0e4ec; border-radius: 0.4rem; padding: 0.6rem; font-size: 0.72rem; overflow-x: auto; white-space: pre-wrap; max-height: 14rem; }
+    ul { margin: 0; padding-left: 1.1rem; font-size: 0.8rem; }
+    #posture { font-size: 0.78rem; color: #4a5364; margin-bottom: 0.5rem; }
+    #agent-state { font-size: 0.8rem; margin: 0.5rem 0; font-weight: 600; }
+    #transcript { display: grid; gap: 0.4rem; }
+    .turn { font-size: 0.8rem; border-left: 3px solid #c3cad6; padding: 0.3rem 0.55rem; background: #fbfcfe; border-radius: 0 0.3rem 0.3rem 0; }
+    .turn.user { border-left-color: #7d9bd6; }
+    .turn.assistant { border-left-color: #8fb8a0; }
+    .turn.tool { border-left-color: #d6b37d; }
+    .muted { color: #6b7484; font-size: 0.74rem; }
+    .approval { border: 1px solid #e6cfa8; background: #fffaf0; border-radius: 0.4rem; padding: 0.5rem 0.65rem; margin-bottom: 0.45rem; }
+    #pending-note { font-size: 0.74rem; color: #6b7484; margin-bottom: 0.5rem; }
+  </style>
 </head>
 <body>
   <header>
-    <h1>all_in_1 <span id="version">D1 foundation</span></h1>
+    <h1>all_in_1 <span id="version">D5 desktop UI</span></h1>
     <div id="status">loading…</div>
   </header>
   <main>
-    <section>
-      <h2>Frozen defaults (read-only)</h2>
-      <pre id="frozen">…</pre>
+    <section id="sec-models">
+      <h2>Models &amp; providers (read-only)</h2>
+      <div id="posture">…</div>
+      <table id="models">
+        <thead>
+          <tr><th>model</th><th>provider</th><th>locality</th><th>cost</th><th>status</th><th>tools</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
     </section>
+
+    <section id="sec-agent">
+      <h2>Agent console</h2>
+      <div class="row">
+        <label>Mode
+          <select id="agent-mode">
+            <option value="INSPECT">INSPECT</option>
+            <option value="SUGGEST">SUGGEST</option>
+            <option value="BUILD">BUILD</option>
+          </select>
+        </label>
+        <label>Run id <input id="agent-run-id" type="text" placeholder="(blank: new run)" /></label>
+        <label class="check"><input id="agent-auto" type="checkbox" /> --auto (bounded)</label>
+        <button id="agent-run">Run turn</button>
+        <button id="agent-cancel" disabled>Cancel</button>
+      </div>
+      <label class="block">Prompt
+        <textarea id="agent-prompt" rows="3" placeholder="ask the agent…"></textarea>
+      </label>
+      <div id="agent-state">no run yet</div>
+      <div id="transcript"></div>
+    </section>
+
+    <section id="sec-tools">
+      <h2>Tools visible in <span id="tools-mode">this mode</span></h2>
+      <table id="tools">
+        <thead>
+          <tr><th>tool</th><th>permission</th><th>approval</th><th>description</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section id="sec-approvals">
+      <h2>Pending tool approvals</h2>
+      <div id="pending-note">the model may not approve its own request — only these buttons can</div>
+      <div id="pending"></div>
+    </section>
+
+    <section id="sec-workspace">
+      <h2>Workspace boundary (read-only)</h2>
+      <ul id="roots"><li>…</li></ul>
+    </section>
+
     <section>
       <h2>Run a diagnostic (full 7-gate pipeline)</h2>
       <div class="row">
@@ -32,6 +116,7 @@
       </div>
       <pre id="output">no run yet</pre>
     </section>
+
     <section>
       <h2>Approvals</h2>
       <pre id="approvals">…</pre>

@@ -147,6 +147,12 @@ function registerHandlers(facade: DesktopFacade): void {
     if (typeof id !== "string") throw new Error("approval id must be a string");
     return facade.denyTool(id, typeof reason === "string" ? reason : undefined);
   });
+  // D5 read-only views. The renderer may see which models exist, why only the
+  // local ones are reachable, and which roots the tools are confined to. None
+  // of these channels mutates anything.
+  ipcMain.handle("all-in-1:models:list", () => facade.listModels());
+  ipcMain.handle("all-in-1:models:posture", () => facade.selectionPosture());
+  ipcMain.handle("all-in-1:workspace:roots", () => facade.listWorkspaceRoots());
   // D4 agent runtime. The renderer drives a run and learns which tools the
   // mode permits; it approves nothing here — the two channels above are the
   // only answer an approval request can receive.
