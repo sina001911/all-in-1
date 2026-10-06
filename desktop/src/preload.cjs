@@ -30,6 +30,13 @@ const api = {
   hasCredential: (name) => ipcRenderer.invoke("all-in-1:credentials:has", name),
   setCredential: (name, value) => ipcRenderer.invoke("all-in-1:credentials:set", name, value),
   deleteCredential: (name) => ipcRenderer.invoke("all-in-1:credentials:delete", name),
+  // D2 tools
+  listTools: () => ipcRenderer.invoke("all-in-1:tools:list"),
+  invokeTool: (request) => ipcRenderer.invoke("all-in-1:tools:invoke", request),
+  listToolAudit: (since) => ipcRenderer.invoke("all-in-1:tools:audit:list", since),
+  listPendingToolApprovals: () => ipcRenderer.invoke("all-in-1:tools:approvals:pending"),
+  approveTool: (id, note) => ipcRenderer.invoke("all-in-1:tools:approve", id, note),
+  denyTool: (id, reason) => ipcRenderer.invoke("all-in-1:tools:deny", id, reason),
 };
 
 contextBridge.exposeInMainWorld("allInOne", api);

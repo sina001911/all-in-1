@@ -118,6 +118,35 @@ function registerHandlers(facade: DesktopFacade): void {
     facade.deleteCredential(name);
     return true;
   });
+  // D2 tool runtime. The renderer may invoke a tool and answer the approval a
+  // privileged request raised; it may not approve a request that does not exist.
+  ipcMain.handle("all-in-1:tools:list", () => facade.listTools());
+  ipcMain.handle("all-in-1:tools:invoke", (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("Invalid tool request");
+    const req = raw as Record<string, unknown>;
+    if (typeof req.toolName !== "string") throw new Error("toolName must be a string");
+    if (typeof req.runId !== "string") throw new Error("runId must be a string");
+    return facade.invokeTool({
+      toolName: req.toolName,
+      input: req.input,
+      runId: req.runId,
+      mode: isSafetyMode(req.mode) ? req.mode : undefined,
+      timeoutMs: typeof req.timeoutMs === "number" ? req.timeoutMs : undefined,
+      justification: typeof req.justification === "string" ? req.justification : undefined,
+    });
+  });
+  ipcMain.handle("all-in-1:tools:audit:list", (_e, since: unknown) =>
+    typeof since === "number" ? facade.listToolAudit(since) : facade.listToolAudit(),
+  );
+  ipcMain.handle("all-in-1:tools:approvals:pending", () => facade.listPendingToolApprovals());
+  ipcMain.handle("all-in-1:tools:approve", (_e, id: unknown, note: unknown) => {
+    if (typeof id !== "string") throw new Error("approval id must be a string");
+    return facade.approveTool(id, typeof note === "string" ? note : undefined);
+  });
+  ipcMain.handle("all-in-1:tools:deny", (_e, id: unknown, reason: unknown) => {
+    if (typeof id !== "string") throw new Error("approval id must be a string");
+    return facade.denyTool(id, typeof reason === "string" ? reason : undefined);
+  });
 }
 
 function createWindow(): void {

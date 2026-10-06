@@ -18,6 +18,7 @@
  */
 import { buildSpecialistStack, type SpecialistStack } from "../../src/specialists/stack.ts";
 import { FROZEN_DEFAULTS } from "../../src/config/schema.ts";
+import { buildToolRuntime, type ToolRuntime } from "../../src/tools/index.ts";
 import { PersistentApprovalStore } from "./persistence/persistent-approval-store.ts";
 import { PersistentBudgetLedger } from "./persistence/persistent-budget-ledger.ts";
 import { FileRunStore } from "./persistence/run-store.ts";
@@ -36,6 +37,9 @@ import { resolveDataPaths, type DataPaths } from "./persistence/paths.ts";
 import { LogStoreSink } from "./log-sink.ts";
 import { CancellationHub } from "./cancellation.ts";
 import type { CredentialProvider } from "./credentials/types.ts";
+import { InteractiveToolApprover } from "./tools/approver.ts";
+import { FileToolAuditStore } from "./tools/audit-store.ts";
+import { DesktopWorkspaceRoots } from "./tools/workspace-roots.ts";
 
 export interface DesktopStack {
   readonly core: SpecialistStack;
@@ -48,6 +52,9 @@ export interface DesktopStack {
   readonly cancellation: CancellationHub;
   readonly approvals: PersistentApprovalStore;
   readonly budget: PersistentBudgetLedger;
+  readonly tools: ToolRuntime;
+  readonly toolApprover: InteractiveToolApprover;
+  readonly workspaceRoots: DesktopWorkspaceRoots;
   readonly frozenDefaults: typeof FROZEN_DEFAULTS;
 }
 
@@ -89,6 +96,18 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
     logSink: new LogStoreSink(logStore),
   });
 
+  // D2: the privileged tool runtime. Its workspace roots are the directories
+  // the user has opened, and its data directory is denied to every tool — a
+  // tool can never read the credential store or rewrite its own audit trail.
+  // The approver is interactive: privileged tools wait for the human.
+  const workspaceRoots = new DesktopWorkspaceRoots(settingsStore, paths.root);
+  const toolApprover = new InteractiveToolApprover();
+  const tools = buildToolRuntime({
+    workspace: workspaceRoots.manager(),
+    approver: toolApprover,
+    audit: new FileToolAuditStore(new JsonlAppendStore(paths.root, "tool-audit.jsonl")),
+  });
+
   return {
     core,
     paths,
@@ -100,6 +119,9 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
     cancellation: new CancellationHub(),
     approvals,
     budget,
+    tools,
+    toolApprover,
+    workspaceRoots,
     frozenDefaults: FROZEN_DEFAULTS,
   };
 }

@@ -28,6 +28,9 @@ import type {
   RunRecord,
   UsageRecord,
 } from "./persistence/types.ts";
+import type { ToolRequest, ToolResult } from "../../src/tools/types.ts";
+import type { ToolAuditRecord } from "../../src/tools/audit.ts";
+import type { ApprovalRecord as ToolApprovalEntry } from "./tools/approver.ts";
 
 export interface DiagnosticRequest {
   readonly mode: SafetyMode;
@@ -330,6 +333,63 @@ export class DesktopFacade {
 
   deleteCredential(name: string): void {
     this.stack.credentials.delete(name);
+  }
+
+  // ---- tool runtime (D2) --------------------------------------------
+  //
+  // The privileged layer. Every call goes through the executor, hence through
+  // validation, the permission policy, the workspace boundary, and (for a
+  // privileged class) the human approval. The facade exposes no way to bypass
+  // any of them: there is no "approve my own request" method here.
+
+  /** The tools the runtime offers, with the privilege class each carries. */
+  listTools(): ReadonlyArray<{ name: string; description: string; permission: string; requiresApproval: boolean }> {
+    return this.stack.tools.registry.list().map((t) => ({
+      name: t.schema.name,
+      description: t.schema.description,
+      permission: t.schema.permission,
+      requiresApproval: this.stack.tools.policy.requiresApproval(t.schema),
+    }));
+  }
+
+  /** Invoke a tool. Returns a settled result; never throws. */
+  async invokeTool(req: ToolRequest): Promise<ToolResult> {
+    return this.stack.tools.executor.execute(req);
+  }
+
+  /** The privileged requests waiting for a human decision. */
+  listPendingToolApprovals(): readonly ToolApprovalEntry[] {
+    return this.stack.toolApprover.listPending();
+  }
+
+  /** Every tool approval request, answered or not, newest last. */
+  listToolApprovals(): readonly ToolApprovalEntry[] {
+    return this.stack.toolApprover.listAll();
+  }
+
+  /** The human approves a pending request. Returns false when it is unknown. */
+  approveTool(id: string, note?: string): boolean {
+    return this.stack.toolApprover.approve(id, note);
+  }
+
+  /** The human denies a pending request. Returns false when it is unknown. */
+  denyTool(id: string, reason?: string): boolean {
+    return this.stack.toolApprover.deny(id, reason);
+  }
+
+  /** The persisted audit trail of every tool invocation. */
+  listToolAudit(since?: number): readonly ToolAuditRecord[] {
+    return this.stack.tools.audit.list(since);
+  }
+
+  /** The workspace roots the tools are confined to. */
+  listWorkspaceRoots(): readonly string[] {
+    return this.stack.workspaceRoots.roots();
+  }
+
+  /** Deny every pending request; used when a run is abandoned or on shutdown. */
+  abandonPendingApprovals(reason: string): void {
+    this.stack.toolApprover.denyAll(reason);
   }
 }
 
