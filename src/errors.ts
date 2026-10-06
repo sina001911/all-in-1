@@ -84,6 +84,12 @@ export const ERROR_CODES = [
   "TOOL_EXECUTION_FAILED",
   "TOOL_LIMIT_EXCEEDED",
   "TOOL_UNAVAILABLE",
+  // agent runtime (D3)
+  "AGENT_CANCELLED",
+  "AGENT_TURN_LIMIT",
+  "AGENT_DRY_RUN_REQUIRED",
+  "AGENT_NO_GATEWAY",
+  "AGENT_ESCALATED",
   // generic
   "NOT_IMPLEMENTED",
 ] as const;
