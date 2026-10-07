@@ -45,6 +45,14 @@ export interface ProviderAdapterOptions {
   readonly availableWithoutCredentials?: boolean;
 }
 
+/**
+ * One structured message in a provider conversation (D7). Defined with the
+ * other wire contracts in `execution/types.ts` and re-exported here so the
+ * adapter abstraction is self-contained.
+ */
+export type { ProviderMessage } from "../execution/types.ts";
+import type { ProviderMessage } from "../execution/types.ts";
+
 export interface ProviderInvokeRequest {
   readonly model: string; // "provider/model"
   readonly capability: string;
@@ -59,6 +67,12 @@ export interface ProviderInvokeRequest {
    * it never executes or approves one.
    */
   readonly tools?: readonly ProviderToolDeclaration[];
+  /**
+   * The conversation so far (D7). When present it is the faithful
+   * representation and `inputs` is the flattened fallback for adapters (and
+   * single-shot callers) that do not use a message list.
+   */
+  readonly messages?: readonly ProviderMessage[];
 }
 
 export interface ProviderAdapter extends ProviderAdapterOptions {

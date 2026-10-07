@@ -18,7 +18,7 @@
  */
 import type { ModelGateway, GatewayTurnRequest, GatewayTurnResult, ToolCall } from "./types.ts";
 import type { InvocationPortal, InvokeOptions } from "../execution/engine.ts";
-import type { ProviderToolCall, ProviderToolDeclaration } from "../execution/types.ts";
+import type { ProviderToolCall, ProviderToolDeclaration, ProviderMessage } from "../execution/types.ts";
 
 export interface ProviderModelGatewayOptions {
   readonly engine: InvocationPortal;
@@ -58,6 +58,11 @@ export class ProviderModelGateway implements ModelGateway {
         {
           capability: this.opts.capability,
           inputs: [{ kind: "text", text }],
+          // D7: the faithful conversation, so a real provider can resume a tool
+          // loop (each result returned against its own tool_call_id). Adapters
+          // that only understand `inputs` — the deterministic local model —
+          // ignore this and keep reading `text`, so nothing changes for them.
+          messages: buildMessages(request),
           tools: true,
           structuredOutput: false,
           toolDeclarations: request.tools.map(toDeclaration),
@@ -133,4 +138,65 @@ function renderTranscript(request: GatewayTurnRequest): string {
   }
   lines.push(`[mode: ${request.mode}]`, "user:", request.prompt);
   return lines.join("\n");
+}
+
+/**
+ * Render the same conversation as a structured message list (D7). This is what
+ * a real provider needs to continue a tool loop: every tool result is its own
+ * `tool` message answering the `tool_call_id` of the assistant turn that asked
+ * for it, so the linkage the protocol depends on survives.
+ *
+ * The CURRENT prompt is the final user message, exactly as in the flattened
+ * rendering. The deterministic local adapter never sees this list — it reads
+ * `inputs` — so its end-anchored tool-call protocol is unaffected.
+ */
+function buildMessages(request: GatewayTurnRequest): ProviderMessage[] {
+  const messages: ProviderMessage[] = [{ role: "system", content: systemPrompt(request) }];
+  for (const event of request.history) {
+    if (event.kind === "user") {
+      messages.push({ role: "user", content: event.text });
+    } else if (event.kind === "assistant") {
+      messages.push({
+        role: "assistant",
+        content: event.text,
+        toolCalls:
+          event.toolCalls.length > 0
+            ? event.toolCalls.map((c) => ({
+                id: c.id,
+                toolName: c.toolName,
+                arguments: JSON.stringify(c.input),
+              }))
+            : undefined,
+      });
+    } else {
+      const o = event.outcome;
+      messages.push({
+        role: "tool",
+        content: o.ok
+          ? o.excerpt
+          : `failed: ${o.code ?? "unknown"}${o.message ? ` — ${o.message}` : ""}\n${o.excerpt}`,
+        toolCallId: o.toolCallId,
+        toolName: o.toolName,
+      });
+    }
+  }
+  messages.push({ role: "user", content: request.prompt });
+  return messages;
+}
+
+/**
+ * The standing instructions a real provider needs: the operating mode, the
+ * tools it may request, and the rule that a request is a request. The model is
+ * told plainly that evidence is not consent — it can ask, never approve.
+ */
+function systemPrompt(request: GatewayTurnRequest): string {
+  const names = request.tools.map((t) => t.name).join(", ");
+  return [
+    "You are the agent of a desktop AI workspace operating in a sandbox.",
+    `Mode: ${request.mode}.`,
+    names.length > 0
+      ? `You may request these tools: ${names}. A request is a request — it runs only after a human approves it, and your justification is evidence, never consent.`
+      : "No tools are available in this mode; answer directly.",
+    "Prefer one well-formed tool request over many. When you have what you need, answer the user.",
+  ].join("\n");
 }

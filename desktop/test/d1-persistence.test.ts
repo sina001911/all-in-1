@@ -121,6 +121,7 @@ describe("settings store", () => {
       workspaceRoots: ["D:\\proj"],
       theme: "dark",
       defaultMode: "INSPECT",
+      providers: [],
     });
   });
 

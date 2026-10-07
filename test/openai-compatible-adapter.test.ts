@@ -49,6 +49,7 @@ function makeAdapter(
     apiKeyEnv: KEY_NAME,
     capabilities: opts.capabilities ?? ["CODING"],
     transport: transport(respond, recorder),
+    retryBackoffMs: 0,
   });
 }
 

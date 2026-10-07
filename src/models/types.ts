@@ -14,7 +14,7 @@
  * `toPricing()`.
  */
 import type { CostClass, Modality } from "../capabilities/types.ts";
-import type { ProviderToolDeclaration } from "../execution/types.ts";
+import type { ProviderToolDeclaration, ProviderMessage } from "../execution/types.ts";
 
 export const MODEL_STATUS = ["active", "beta", "deprecated", "disabled"] as const;
 export type ModelStatus = (typeof MODEL_STATUS)[number];
@@ -163,6 +163,12 @@ export interface SelectionRequest {
     | { readonly kind: "text"; readonly text: string }
     | { readonly kind: "image"; readonly artifactId: string }
   >;
+  /**
+   * The faithful conversation (D7). When present the adapter renders this
+   * instead of flattening `inputs`; adapters that do not understand a message
+   * list keep reading `inputs`. Optional and purely additive.
+   */
+  readonly messages?: readonly ProviderMessage[];
 }
 
 export interface ManualSelection extends ModelRef {

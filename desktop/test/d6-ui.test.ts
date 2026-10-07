@@ -585,7 +585,7 @@ describe("theme persistence", () => {
     expect(frozen.cost.spendBudgetUsd).toBe(0);
     expect(frozen.mainCoder.model).toBe("Atria-Dawn-Preview");
     // And nothing leaked into the settings object itself.
-    expect(Object.keys(f.getSettings()).sort()).toEqual(["defaultMode", "theme", "workspaceRoots"]);
+    expect(Object.keys(f.getSettings()).sort()).toEqual(["defaultMode", "providers", "theme", "workspaceRoots"]);
   });
 
   it("keeps the default mode and theme independent", () => {

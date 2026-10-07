@@ -16,6 +16,7 @@ import { ExecutionEngine } from "./engine.ts";
 import { LocalAdapter, registerLocalModels, registerLocalAgentModel } from "./local-adapter.ts";
 import { AdapterRegistry as ProviderAdapterRegistry } from "./adapter-registry.ts";
 import { DEFAULT_EGRESS_POLICY, allowHost } from "./egress.ts";
+import { registerUserProvider, type UserProvidedProvider } from "./user-providers.ts";
 
 export interface ExecutionStack {
   readonly catalog: ModelCatalog;
@@ -26,6 +27,8 @@ export interface ExecutionStack {
   readonly engine: ExecutionEngine;
   readonly egress: ReturnType<typeof allowHost>;
   readonly budget: BudgetLedger;
+  /** Warnings from user-provider registration (D7), surfaced to the user. */
+  readonly registrationWarnings: readonly string[];
 }
 
 export function buildExecutionStack(opts: {
@@ -54,6 +57,11 @@ export function buildExecutionStack(opts: {
    * declares tool calling.
    */
   agentModel?: boolean;
+  /**
+   * User-registered providers (D7). Each is validated and registered
+   * additively; a bad entry is skipped with a warning, never thrown.
+   */
+  providers?: readonly UserProvidedProvider[];
 } = {}): ExecutionStack {
   const catalog = new ModelCatalog();
   registerLocalModels(catalog);
@@ -73,6 +81,13 @@ export function buildExecutionStack(opts: {
     (policy, host) => allowHost(policy, host),
     DEFAULT_EGRESS_POLICY,
   );
+  // D7: user providers are registered BEFORE the engine is built, so the engine
+  // sees the catalogue and adapters it will actually select from.
+  const registrationWarnings: string[] = [];
+  for (const provider of opts.providers ?? []) {
+    const result = registerUserProvider(provider, adapters, catalog);
+    registrationWarnings.push(...result.warnings);
+  }
   const engine = new ExecutionEngine({
     catalog,
     capabilities,
@@ -83,5 +98,5 @@ export function buildExecutionStack(opts: {
     policy: opts.policy,
     egress,
   });
-  return { catalog, capabilities, chains, approvals, adapters, engine, egress, budget };
+  return { catalog, capabilities, chains, approvals, adapters, engine, egress, budget, registrationWarnings };
 }

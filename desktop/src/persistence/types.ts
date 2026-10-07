@@ -71,20 +71,57 @@ export interface UsageStore extends Persistable {
 }
 
 /**
- * Mutable desktop settings. Frozen fields (mainCoder, cost policy, egress,
- * media) are deliberately absent: they are read-only and exposed separately via
- * the facade, so a settings write can never change a frozen default.
+ * Mutable desktop settings. Frozen fields (mainCoder, cost policy, media) are
+ * deliberately absent: they are read-only and exposed separately via the
+ * facade, so a settings write can never change a frozen default.
+ *
+ * Egress is NOT a frozen field — the shipped POLICY is deny-all, and that
+ * stays the default for every fresh install, but the user may register a
+ * provider. Its host is the only host the stack then opens, and only to speak
+ * to that provider. This is the designed escape hatch that makes a real local
+ * model server reachable without touching a frozen default.
  */
 export interface DesktopSettings {
   readonly workspaceRoots: readonly string[];
   readonly theme: "system" | "light" | "dark";
   readonly defaultMode: "INSPECT" | "SUGGEST" | "BUILD";
+  /**
+   * Providers the user has registered (D7). Validated strictly at the settings
+   * boundary: an `apiKeyEnv` is an environment-variable NAME only, never a key
+   * value, and every field is bounds-checked before it reaches the engine.
+   */
+  readonly providers: readonly SettingsProvider[];
+}
+
+/** One model the user declared at a provider (D7). */
+export interface SettingsProviderModel {
+  readonly id: string;
+  readonly displayName?: string;
+  readonly capabilities?: readonly string[];
+  readonly contextLimit?: number;
+  readonly outputLimit?: number;
+  readonly tools?: boolean;
+  readonly costPer1MUsd?: { readonly input: number; readonly output: number };
+}
+
+/** A provider the user registered (D7). No key VALUE ever lives here. */
+export interface SettingsProvider {
+  readonly id: string;
+  readonly displayName?: string;
+  readonly endpoint: string;
+  /** Environment-variable NAME of the key, or null for a keyless local server. */
+  readonly apiKeyEnv?: string | null;
+  readonly models: readonly SettingsProviderModel[];
+  readonly timeoutMs?: number;
+  readonly maxRetries?: number;
+  readonly enabled?: boolean;
 }
 
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   workspaceRoots: [],
   theme: "system",
   defaultMode: "INSPECT",
+  providers: [],
 };
 
 export interface SettingsStore extends Persistable {

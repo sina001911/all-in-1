@@ -103,6 +103,31 @@ Commands registered in OpenCode:
 /all-in-1-policy                               # the frozen defaults
 ```
 
+## D7 — A Real Provider Path
+
+The pipeline finally reaches a real model server. The additive surface:
+
+- `src/execution/user-providers.ts` — validates a user-declared provider
+  (`id`, `endpoint`, `apiKeyEnv` as an env-var NAME, models, pricing) and
+  registers an `OpenAICompatibleAdapter` plus its models additively. A bad
+  entry is skipped with a warning, never thrown, so one bad settings entry
+  cannot break startup. Plain `http` to a non-loopback host is refused before
+  any key is read.
+- `OpenAICompatibleAdapter` now sends the declared tools, parses the
+  provider's tool calls (decoding JSON-string arguments), renders the
+  faithful `messages` conversation, derives real cost from reported token
+  counts and the registered rate (never invented), supports a keyless
+  loopback endpoint, and bounds retries to genuinely transient failures
+  (429/5xx/transport errors) with typed errors after the budget is spent.
+- The engine, the model gateway, and the specialist stack carry the
+  conversation (`messages`) and surface `registrationWarnings`.
+- Desktop settings gained a strictly validated `providers` list; the egress
+  policy opens exactly the hosts of the registered providers — deny-all
+  remains the default for a fresh install.
+
+Everything remains inert under the frozen defaults: no providers registered,
+no hosts allowlisted, budget 0.
+
 ## Commands (verified on Node 24.21.0 / npm 11.19.0)
 
 ```sh

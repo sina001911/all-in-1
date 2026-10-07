@@ -10,6 +10,7 @@
 import type { LogSink } from "../log/logger.ts";
 import { Logger, MemorySink } from "../log/logger.ts";
 import { buildExecutionStack, type ExecutionStack } from "../execution/stack.ts";
+import type { UserProvidedProvider } from "../execution/user-providers.ts";
 import type { ApprovalStore } from "../registry/approvals.ts";
 import type { BudgetLedger } from "../registry/budget.ts";
 import { LoggedExecutionEngine } from "../observability/execution-logger.ts";
@@ -40,6 +41,13 @@ export function buildSpecialistStack(opts: {
    * default stack is unchanged.
    */
   agentModel?: boolean;
+  /**
+   * Hosts to allowlist for egress (D7). Applied before the engine is built so
+   * the policy the engine enforces is the policy that was requested.
+   */
+  allowHosts?: readonly string[];
+  /** User-registered providers (D7). */
+  providers?: readonly UserProvidedProvider[];
 } = {}): SpecialistStack {
   const stack = buildExecutionStack(opts);
   const sink = opts.logSink ?? new MemorySink();

@@ -34,6 +34,7 @@ import type {
   SettingsStore,
   LogStore,
   DesktopSettings,
+  SettingsProvider,
 } from "./persistence/types.ts";
 import { resolveDataPaths, type DataPaths } from "./persistence/paths.ts";
 import { LogStoreSink } from "./log-sink.ts";
@@ -59,6 +60,8 @@ export interface DesktopStack {
   readonly workspaceRoots: DesktopWorkspaceRoots;
   readonly agent: AgentRuntime;
   readonly agentGateway: ProviderModelGateway;
+  /** Warnings from user-provider registration (D7), shown in the Models view. */
+  readonly providerWarnings: readonly string[];
   readonly frozenDefaults: typeof FROZEN_DEFAULTS;
 }
 
@@ -94,15 +97,25 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
     new JsonFileStore(paths.root, "budget.json"),
   );
 
+  // D7: the user's registered providers are read from settings BEFORE the core
+  // stack is built, so the catalogue, adapters, and egress policy the engine
+  // holds are the ones the user configured.
+  const settings = settingsStore.get();
+
   const core = buildSpecialistStack({
     approvals,
     budget,
     logSink: new LogStoreSink(logStore),
     // The desktop runs an agent loop, which needs a tool-capable model. This
-    // opts in the deterministic local agent model ONLY — the remote catalogue
-    // stays empty, egress stays deny-all, and the budget stays 0, so under the
-    // frozen defaults the agent can only ever reach a local, zero-cost model.
+    // opts in the deterministic local agent model ONLY as the built-in; a user
+    // may additionally register providers below. The frozen posture is
+    // unchanged for a fresh install: no providers, deny-all egress, budget 0.
     agentModel: true,
+    // D7: register the user's providers and open egress to exactly the hosts
+    // they registered a provider against — nothing more. Loopback is permitted
+    // by the default policy already, so a local model server needs no entry.
+    providers: settings.providers,
+    allowHosts: hostsForProviders(settings.providers),
   });
 
   // D2: the privileged tool runtime. Its workspace roots are the directories
@@ -140,8 +153,34 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
     workspaceRoots,
     agent,
     agentGateway,
+    // D7: the warnings from user-provider registration, surfaced in the UI so a
+    // bad entry is explained rather than silently ignored.
+    providerWarnings: core.stack.registrationWarnings,
     frozenDefaults: FROZEN_DEFAULTS,
   };
+}
+
+/**
+ * The hosts egress is opened for: exactly the hosts of the providers the user
+ * registered. A loopback provider contributes nothing (loopback is already
+ * allowed), and an unparseable endpoint contributes nothing — its provider is
+ * skipped at registration with a warning anyway.
+ */
+function hostsForProviders(providers: readonly SettingsProvider[]): readonly string[] {
+  const hosts: string[] = [];
+  for (const provider of providers) {
+    try {
+      const host = new URL(provider.endpoint).hostname.toLowerCase();
+      if (host && !hosts.includes(host) && !isLoopbackHost(host)) hosts.push(host);
+    } catch {
+      /* unparseable: registration reports it */
+    }
+  }
+  return hosts;
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
 }
 
 /** Convenience accessor for the mutable settings (typed, frozen-free). */

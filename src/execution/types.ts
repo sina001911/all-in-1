@@ -56,6 +56,38 @@ export interface ProviderToolCall {
   readonly justification?: string;
 }
 
+/**
+ * One structured message in a provider conversation (D7).
+ *
+ * A flat list of text and image parts is enough for a single-shot completion,
+ * but not for a real tool-calling loop: a provider that emitted tool calls
+ * expects each result returned as its own `tool` message carrying the
+ * originating `toolCallId`. Flattening everything into one blob loses that
+ * linkage, so a genuine model cannot continue a tool loop. `messages` carries
+ * the conversation faithfully.
+ */
+export type ProviderMessage =
+  | { readonly role: "system"; readonly content: string }
+  | { readonly role: "user"; readonly content: string }
+  | {
+      readonly role: "assistant";
+      readonly content: string;
+      /** Tool calls this assistant turn emitted, for the provider to resume. */
+      readonly toolCalls?: ReadonlyArray<{
+        readonly id: string;
+        readonly toolName: string;
+        /** JSON-encoded arguments, because that is the wire shape. */
+        readonly arguments: string;
+      }>;
+    }
+  | {
+      readonly role: "tool";
+      readonly content: string;
+      /** The `tool_call_id` this result answers. */
+      readonly toolCallId: string;
+      readonly toolName?: string;
+    };
+
 /** A failure surfaced as data rather than a thrown error. */
 export interface ProviderInvokeFailure {
   readonly ok: false;

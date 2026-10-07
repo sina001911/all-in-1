@@ -137,6 +137,7 @@ export class ExecutionEngine {
         ) ?? [],
       structuredOutputSchema: request.structuredOutput ? {} : undefined,
       tools: request.toolDeclarations,
+      messages: request.messages,
     };
     adapter.validateInvoke(invokeRequest, this.opts.catalog);
 
