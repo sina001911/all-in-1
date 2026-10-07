@@ -1111,7 +1111,7 @@
     if ((saved.providers || []).length === existing.length) {
       toast("That provider was rejected (see above) — nothing was added.", "warn");
     } else {
-      toast("Provider saved. Restart to make it reachable.", "ok");
+      toast("Provider saved — applied immediately.", "ok");
     }
     await loadSettings();
   }
@@ -1119,7 +1119,7 @@
   async function removeProvider(id) {
     var answer = await openModal(
       "Remove " + id + "?",
-      h("p", { class: "muted", style: "margin:0", text: "Its models leave the catalogue after a restart." }),
+      h("p", { class: "muted", style: "margin:0", text: "Its models leave the catalogue immediately." }),
       { confirmLabel: "Remove", cancelLabel: "Keep" },
     );
     if (!answer) return;
@@ -1130,7 +1130,7 @@
         return p.id !== id;
       }),
     });
-    toast("Provider removed. Restart to apply.", "warn");
+    toast("Provider removed — applied immediately.", "warn");
     await loadSettings();
   }
 

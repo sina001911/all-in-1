@@ -130,8 +130,8 @@ describe("renderer providers UI", () => {
     expect(renderer).toContain("getProviderWarnings");
   });
 
-  it("restart semantics are documented in the page copy", () => {
+  it("immediate-application copy is in the page", () => {
     const html = readFileSync(join(SRC, "renderer", "index.html"), "utf8");
-    expect(html).toMatch(/restart/i);
+    expect(html).toMatch(/apply immediately/i);
   });
 });

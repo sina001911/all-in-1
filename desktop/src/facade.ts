@@ -311,7 +311,17 @@ export class DesktopFacade {
   }
 
   patchSettings(patch: Partial<DesktopSettings>): DesktopSettings {
-    return this.stack.settingsStore.patch(patch);
+    const before = this.stack.settingsStore.get();
+    const saved = this.stack.settingsStore.patch(patch);
+    // D10: a change to the provider list takes effect immediately — this
+    // rebuilds only the provider-dependent core and swaps it in atomically.
+    // In-flight invocations keep their original engine; new ones see the new
+    // catalogue, egress, and adapters. If the rebuild fails, the error
+    // propagates and the previous core stays.
+    if ("providers" in patch && JSON.stringify(before.providers) !== JSON.stringify(saved.providers)) {
+      this.stack.reloadProviders();
+    }
+    return saved;
   }
 
   // ---- credentials ----------------------------------------------------

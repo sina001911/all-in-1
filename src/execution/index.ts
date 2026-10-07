@@ -23,6 +23,7 @@ export {
 } from "./egress.ts";
 export type { EgressPolicy, EgressPolicyKind } from "./egress.ts";
 export { resolveSecret, resolveBearerToken } from "./secrets.ts";
+export { SwappablePortal } from "./swappable-portal.ts";
 export { CredentialUnavailableError } from "./secrets.ts";
 export type {
   ProviderInvokeResult,

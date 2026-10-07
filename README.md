@@ -156,6 +156,25 @@ The Models view now reports the provider path truthfully:
   egress allowlist, and it keeps stating that the budget and FREE_ONLY
   cost policy remain the binding bounds.
 
+## D10 — Hot-reload Providers Without Restart
+
+A provider settings change now applies immediately. The patch path is:
+settings patch → sanitize (unchanged D8 boundary) → if `providers` changed →
+`reloadProviders()`:
+
+- Only the provider-dependent core is rebuilt: catalog, capabilities,
+  chains, adapters, egress policy, engine, and specialist runner.
+- The swap is atomic from the caller's perspective: the provider catalogue,
+  engine, and egress policy move together as references on `DesktopStack`.
+- The pre-existing `SwappablePortal` reference the agent gateway (and so the
+  agent runtime) holds is repointed to the new engine; in-flight agent turns
+  keep their original engine.
+- If the rebuild throws (the settings sanitizer already bounds input,
+  defensively), nothing is replaced: the previous stack continues to serve.
+- The same stores, approvals, budget ledger, run/usage stores, log store,
+  credentials, cancellation hub, tool runtime, and workspace roots are
+  reused — hot-reload touches none of them.
+
 ## Commands (verified on Node 24.21.0 / npm 11.19.0)
 
 ```sh

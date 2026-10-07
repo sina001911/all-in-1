@@ -17,6 +17,7 @@
  * and a memory credential provider.
  */
 import { buildSpecialistStack, type SpecialistStack } from "../../src/specialists/stack.ts";
+import { SwappablePortal } from "../../src/execution/swappable-portal.ts";
 import { FROZEN_DEFAULTS } from "../../src/config/schema.ts";
 import { buildToolRuntime, type ToolRuntime } from "../../src/tools/index.ts";
 import { buildAgentRuntime, type AgentRuntime } from "../../src/agent/index.ts";
@@ -60,8 +61,16 @@ export interface DesktopStack {
   readonly workspaceRoots: DesktopWorkspaceRoots;
   readonly agent: AgentRuntime;
   readonly agentGateway: ProviderModelGateway;
-  /** Warnings from user-provider registration (D7), shown in the Models view. */
+  /** Warnings from user-provider registration (D7), shown in the UI. Live: reflects the current stack after a reload. */
   readonly providerWarnings: readonly string[];
+  /**
+   * Rebuild the provider-dependent core (catalogue, adapters, egress, engine,
+   * runner) from current settings and atomically swap it in (D10). The old
+   * stack keeps serving in-flight invocations; new invocations use the new
+   * one. Persistent stores, the tool runtime, and the agent runtime are
+   * untouched. If the rebuild throws, the previous stack stays in place.
+   */
+  reloadProviders(): readonly string[];
   readonly frozenDefaults: typeof FROZEN_DEFAULTS;
 }
 
@@ -102,21 +111,28 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
   // holds are the ones the user configured.
   const settings = settingsStore.get();
 
-  const core = buildSpecialistStack({
-    approvals,
-    budget,
-    logSink: new LogStoreSink(logStore),
-    // The desktop runs an agent loop, which needs a tool-capable model. This
-    // opts in the deterministic local agent model ONLY as the built-in; a user
-    // may additionally register providers below. The frozen posture is
-    // unchanged for a fresh install: no providers, deny-all egress, budget 0.
-    agentModel: true,
-    // D7: register the user's providers and open egress to exactly the hosts
-    // they registered a provider against — nothing more. Loopback is permitted
-    // by the default policy already, so a local model server needs no entry.
-    providers: settings.providers,
-    allowHosts: hostsForProviders(settings.providers),
-  });
+  const buildCore = (): SpecialistStack =>
+    buildSpecialistStack({
+      approvals,
+      budget,
+      logSink: new LogStoreSink(logStore),
+      // The desktop runs an agent loop, which needs a tool-capable model. This
+      // opts in the deterministic local agent model ONLY as the built-in; a user
+      // may additionally register providers below. The frozen posture is
+      // unchanged for a fresh install: no providers, deny-all egress, budget 0.
+      agentModel: true,
+      // D7/D10: register the user's providers and open egress to exactly the
+      // hosts they registered a provider against — nothing more. Loopback is
+      // permitted by the default policy already, so a local model server needs
+      // no entry.
+      providers: settingsStore.get().providers,
+      allowHosts: hostsForProviders(settingsStore.get().providers),
+    });
+
+  let current = buildCore();
+  // D10: the gateway, the runner path, and every facade read go through live
+  // references, so a rebuilt core is seen without re-binding constructors.
+  const portal = new SwappablePortal(current.stack.engine);
 
   // D2: the privileged tool runtime. Its workspace roots are the directories
   // the user has opened, and its data directory is denied to every tool — a
@@ -133,12 +149,15 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
   // D4: the agent runtime. The gateway routes every turn through the execution
   // engine, hence through the frozen gates; the agent holds the tool runtime,
   // never the approver, so a tool request from the model can only be settled
-  // by the human behind `toolApprover`.
-  const agentGateway = new ProviderModelGateway({ engine: core.stack.engine });
+  // by the human behind `toolApprover`. D10: the gateway sees the swappable
+  // portal, so a rebuilt provider stack takes effect for the agent too.
+  const agentGateway = new ProviderModelGateway({ engine: portal });
   const agent = buildAgentRuntime({ tools, gateway: agentGateway });
 
-  return {
-    core,
+  const stack: DesktopStack = {
+    get core() {
+      return current;
+    },
     paths,
     runStore,
     usageStore,
@@ -154,10 +173,21 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
     agent,
     agentGateway,
     // D7: the warnings from user-provider registration, surfaced in the UI so a
-    // bad entry is explained rather than silently ignored.
-    providerWarnings: core.stack.registrationWarnings,
+    // bad entry is explained rather than silently ignored. Live after reload.
+    get providerWarnings() {
+      return current.stack.registrationWarnings;
+    },
+    reloadProviders() {
+      // Build first: if the rebuild throws, nothing below runs and the old
+      // stack keeps serving both in-flight and new invocations.
+      const next = buildCore();
+      portal.swap(next.stack.engine);
+      current = next;
+      return next.stack.registrationWarnings;
+    },
     frozenDefaults: FROZEN_DEFAULTS,
   };
+  return stack;
 }
 
 /**
