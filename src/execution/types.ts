@@ -98,10 +98,54 @@ export interface ProviderInvokeFailure {
 
 /** A transport function: the only seam through which the network is reached. */
 export interface HttpTransport {
-  post(url: string, body: unknown, headers: Record<string, string>): Promise<HttpResponse>;
+  post(
+    url: string,
+    body: unknown,
+    headers: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<HttpResponse>;
+  /**
+   * Streaming call (D11): starts the request and returns the response status
+   * with the parsed frame stream. The same injected transport seam as `post`,
+   * so a test can inject a fake stream and never opens a socket.
+   */
+  postStream?(
+    url: string,
+    body: unknown,
+    headers: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<StreamTransportResponse>;
 }
 
 export interface HttpResponse {
   readonly status: number;
   readonly body: unknown;
+}
+
+/**
+ * One event from a streaming provider response (D11). Chunk text is the
+ * model's prose; tool-call deltas arrive as argument fragments; `usage`
+ * carries the provider's own accounting when it reports any.
+ */
+export type StreamEvent =
+  | { readonly kind: "text"; readonly text: string }
+  | {
+      readonly kind: "tool-call-delta";
+      readonly index: number;
+      readonly id?: string;
+      readonly toolName?: string;
+      readonly argumentsDelta?: string;
+    }
+  | { readonly kind: "finish"; readonly finishReason?: string }
+  | {
+      readonly kind: "usage";
+      readonly promptTokens?: number;
+      readonly completionTokens?: number;
+      readonly totalTokens?: number;
+    };
+
+/** Transport-level streaming response (D11). */
+export interface StreamTransportResponse {
+  readonly status: number;
+  readonly events: AsyncIterable<StreamEvent>;
 }

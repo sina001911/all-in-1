@@ -60,6 +60,9 @@ function sanitizeModel(raw: unknown): SettingsProviderModel | undefined {
   const outputLimit = finiteBounded(raw.outputLimit, 256, 1_000_000);
   if (outputLimit !== undefined) out.outputLimit = outputLimit;
   if (typeof raw.tools === "boolean") out.tools = raw.tools;
+  // A descriptor may lie about streaming; the adapter still refuses honestly.
+  // Persisting the flag is only claiming the model advertises streaming.
+  if (typeof raw.streaming === "boolean") out.streaming = raw.streaming;
   if (isObject(raw.costPer1MUsd)) {
     const input = finiteBounded(raw.costPer1MUsd.input, 0, 1000);
     const output = finiteBounded(raw.costPer1MUsd.output, 0, 1000);

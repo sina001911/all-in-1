@@ -19,6 +19,7 @@
 import type { Locality } from "../models/types.ts";
 import type { ModelDescriptor } from "../models/types.ts";
 import type { ProviderInvokeResult, ProviderToolDeclaration } from "../execution/types.ts";
+import type { StreamEvent } from "../execution/types.ts";
 import { AllInOneError } from "../errors.ts";
 
 export const PROVIDER_PROTOCOLS = [
@@ -75,6 +76,19 @@ export interface ProviderInvokeRequest {
   readonly messages?: readonly ProviderMessage[];
 }
 
+/** Per-call options of a provider invocation (D11 extends the P4 contract). */
+export interface ProviderInvokeOptions {
+  /**
+   * Ask the provider for a streamed response. Adapters that do not support
+   * streaming MUST refuse honestly (typed error), never silently buffer.
+   */
+  readonly stream?: boolean;
+  /** Receive each streaming event as it arrives; the final result is still returned whole. */
+  readonly onEvent?: (event: StreamEvent) => void;
+  /** Caller cancellation propagated to the transport (D11). */
+  readonly signal?: AbortSignal;
+}
+
 export interface ProviderAdapter extends ProviderAdapterOptions {
   /** Whether this provider may serve the capability (isolation check). */
   supportsCapability(capability: string): boolean;
@@ -90,7 +104,7 @@ export interface ProviderAdapter extends ProviderAdapterOptions {
    * The base class still throws NOT_IMPLEMENTED, so any adapter that has not
    * implemented a real call path fails safely and typed.
    */
-  invoke(request: ProviderInvokeRequest): Promise<ProviderInvokeResult>;
+  invoke(request: ProviderInvokeRequest, opts?: ProviderInvokeOptions): Promise<ProviderInvokeResult>;
 }
 
 /**
@@ -176,7 +190,7 @@ export class BaseProviderAdapter implements ProviderAdapter {
     }
   }
 
-  async invoke(_request: ProviderInvokeRequest): Promise<ProviderInvokeResult> {
+  async invoke(_request: ProviderInvokeRequest, _opts?: ProviderInvokeOptions): Promise<ProviderInvokeResult> {
     throw new AllInOneError(
       `${this.id}: live model invocation is not implemented in P3 (metadata + validation only)`,
       "NOT_IMPLEMENTED",

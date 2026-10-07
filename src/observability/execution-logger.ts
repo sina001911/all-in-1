@@ -33,6 +33,7 @@ const GATE_NAMES: Readonly<Record<string, string>> = {
   PROVIDER_UNREACHABLE: "invoke",
   PROVIDER_RATE_LIMITED: "invoke",
   PROVIDER_CALL_FAILED: "invoke",
+  PROVIDER_STREAM_INTERRUPTED: "invoke",
 };
 
 export interface LoggedEngineOptions {

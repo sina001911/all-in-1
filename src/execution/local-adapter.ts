@@ -17,7 +17,7 @@
  */
 import { createHash } from "node:crypto";
 import { BaseProviderAdapter } from "../providers/types.ts";
-import type { ProviderInvokeRequest } from "../providers/types.ts";
+import type { ProviderInvokeRequest, ProviderInvokeOptions } from "../providers/types.ts";
 import type { ProviderInvokeResult, ProviderToolCall } from "./types.ts";
 
 export class LocalAdapter extends BaseProviderAdapter {
@@ -47,10 +47,24 @@ export class LocalAdapter extends BaseProviderAdapter {
     });
   }
 
-  override async invoke(request: ProviderInvokeRequest): Promise<ProviderInvokeResult> {
+  override async invoke(
+    request: ProviderInvokeRequest,
+    opts?: ProviderInvokeOptions,
+  ): Promise<ProviderInvokeResult> {
     const started = Date.now();
     const hash = sha256(JSON.stringify({ model: request.model, inputs: request.inputs }));
     const text = buildText(request, hash);
+    // The deterministic adapter has no network stream; when a caller asks for
+    // streaming it still honours the contract by emitting exactly one event
+    // carrying its whole deterministic payload. It never claims postStream.
+    if (opts?.stream === true) {
+      try {
+        opts.onEvent?.({ kind: "text", text });
+        opts.onEvent?.({ kind: "finish", finishReason: "stop" });
+      } catch {
+        /* a failing consumer never breaks the call */
+      }
+    }
     return {
       providerId: this.id,
       modelId: request.model,

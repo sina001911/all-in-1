@@ -18,13 +18,15 @@
  * or availability has been verified, so this adapter exists but is not wired
  * into any registry. Registering it is an explicit, reviewed act.
  */
-import { BaseProviderAdapter, type ProviderInvokeRequest } from "../providers/types.ts";
+import { BaseProviderAdapter, type ProviderInvokeRequest, type ProviderInvokeOptions } from "../providers/types.ts";
 import type {
   ProviderInvokeResult,
   ProviderToolCall,
   ProviderToolDeclaration,
   HttpTransport,
   HttpResponse,
+  StreamEvent,
+  StreamTransportResponse,
 } from "./types.ts";
 import { resolveBearerToken } from "./secrets.ts";
 import { AllInOneError, toAllInOneError } from "../errors.ts";
@@ -120,7 +122,11 @@ export class OpenAICompatibleAdapter extends BaseProviderAdapter {
     this.pricing = opts.pricing ?? {};
   }
 
-  override async invoke(request: ProviderInvokeRequest): Promise<ProviderInvokeResult> {
+  override async invoke(
+    request: ProviderInvokeRequest,
+    opts?: ProviderInvokeOptions,
+  ): Promise<ProviderInvokeResult> {
+    if (opts?.stream === true) return this.invokeStreaming(request, opts);
     const started = Date.now();
     const modelName = request.model.split("/")[1];
     // A keyless endpoint simply sends no Authorization header. A keyed one
@@ -144,11 +150,16 @@ export class OpenAICompatibleAdapter extends BaseProviderAdapter {
     // Bounded retry over genuinely transient failures only.
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
-        response = await this.transport.post(url, payload, headers);
+        response = await this.transport.post(url, payload, headers, opts?.signal);
         if (response.status !== 429 && response.status < 500) break;
         lastStatus = response.status;
         response = undefined;
       } catch (e) {
+        if (opts?.signal?.aborted) {
+          throw new AllInOneError("invocation cancelled by the caller", "PROVIDER_CANCELLED", "unavailable", {
+            retryable: false,
+          });
+        }
         lastTransportError = e;
       }
       if (attempt < this.maxRetries && this.retryBackoffMs > 0) {
@@ -246,6 +257,196 @@ export class OpenAICompatibleAdapter extends BaseProviderAdapter {
       latencyMs: Date.now() - started,
       finishReason: choice?.finish_reason,
       raw: undefined, // never surface the raw payload
+    };
+  }
+
+  /**
+   * Streaming call (D11). The provider is asked for `stream: true` and the
+   * resulting frame stream is tee'd to the caller via `onEvent`. The result
+   * contract is identical to the buffered invocation: the model's frames are
+   * assembled into one ProviderInvokeResult.
+   *
+   * Retry applies only BEFORE any event has been delivered — once a single
+   * delta has reached the caller, retrying would replay visible text, so a
+   * mid-stream failure is surfaced typed and partial content is never
+   * reported as success.
+   */
+  private async invokeStreaming(
+    request: ProviderInvokeRequest,
+    opts: ProviderInvokeOptions,
+  ): Promise<ProviderInvokeResult> {
+    const started = Date.now();
+    const modelName = request.model.split("/")[1];
+    const key = this.apiKeyEnv === null ? null : resolveBearerToken(this.apiKeyEnv);
+    const url = `${this.endpoint}/chat/completions`;
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (key !== null) headers.Authorization = `Bearer ${key}`;
+
+    if (!this.transport.postStream) {
+      throw new AllInOneError(
+        `${this.id} does not support streaming; its model descriptor declares it, which the descriptor and the transport must agree on`,
+        "PROVIDER_CALL_FAILED",
+        "config",
+        { retryable: false },
+      );
+    }
+
+    const payload = {
+      model: modelName,
+      messages: buildMessages(request),
+      tools: request.tools?.map(toOpenAITool),
+      response_format: request.structuredOutputSchema ? { type: "json_object" } : undefined,
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+
+    let delivered = 0;
+    let lastStatus = 0;
+    let lastIterError: unknown;
+    type AttemptResult = { text: string; toolCalls: ProviderToolCall[]; finishReason?: string; usageChunk?: ChatCompletionResponse["usage"] };
+    let assembled: AttemptResult | undefined;
+
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      try {
+        const response: StreamTransportResponse = await this.transport.postStream(url, payload, headers, opts.signal);
+        lastStatus = response.status;
+        if (response.status === 429 || response.status >= 500) {
+          await response.events[Symbol.asyncIterator]().return?.().catch(() => undefined);
+          lastIterError = new Error(`HTTP ${response.status}`);
+          if (attempt < this.maxRetries && delivered === 0) {
+            if (this.retryBackoffMs > 0) await delay(this.retryBackoffMs * (attempt + 1));
+            continue;
+          }
+          break;
+        }
+        if (response.status < 200 || response.status >= 300) {
+          // Pre-event HTTP failure: typed exactly like the buffered path.
+          if (response.status === 401 || response.status === 403) {
+            throw new AllInOneError(
+              `${this.id} rejected the credential (HTTP ${response.status})`,
+              "CREDENTIAL_UNAVAILABLE",
+              "unavailable",
+              { retryable: false },
+            );
+          }
+          if (response.status === 429) {
+            throw new AllInOneError(
+              `${this.id} rate-limited the request (HTTP 429)`,
+              "PROVIDER_RATE_LIMITED",
+              "unavailable",
+              { retryable: true },
+            );
+          }
+          if (response.status >= 500) {
+            throw new AllInOneError(
+              `${this.id} returned HTTP ${response.status}`,
+              "PROVIDER_UNREACHABLE",
+              "unavailable",
+              { retryable: true },
+            );
+          }
+          throw new AllInOneError(
+            `${this.id} returned HTTP ${response.status}`,
+            "PROVIDER_CALL_FAILED",
+            "unavailable",
+            { retryable: false },
+          );
+        }
+
+        const textParts: string[] = [];
+        const toolByIndex = new Map<number, { id?: string; toolName?: string; arguments: string }>();
+        let finishReason: string | undefined;
+        let usageChunk: ChatCompletionResponse["usage"];
+
+        for await (const event of response.events) {
+          delivered++;
+          try {
+            opts.onEvent?.(event);
+          } catch {
+            /* a failing consumer never breaks the provider call */
+          }
+          if (event.kind === "text") textParts.push(event.text);
+          else if (event.kind === "tool-call-delta") {
+            const entry = toolByIndex.get(event.index) ?? { arguments: "" };
+            if (event.id) entry.id = event.id;
+            if (event.toolName) entry.toolName = event.toolName;
+            if (event.argumentsDelta) entry.arguments += event.argumentsDelta;
+            toolByIndex.set(event.index, entry);
+          } else if (event.kind === "finish") finishReason = event.finishReason;
+          else if (event.kind === "usage") usageChunk = { prompt_tokens: event.promptTokens, completion_tokens: event.completionTokens, total_tokens: event.totalTokens };
+        }
+
+        const toolCalls: ProviderToolCall[] = [...toolByIndex.entries()]
+          .sort(([a], [b]) => a - b)
+          .map(([, entry]) => ({
+            id: entry.id && entry.id.length > 0 ? entry.id : `call_${toolByIndex.size}`,
+            toolName: entry.toolName ?? "",
+            input: parseArguments(entry.arguments),
+          }))
+          .filter((c) => c.toolName.length > 0);
+
+        assembled = { text: textParts.join(""), toolCalls, finishReason, usageChunk };
+        lastIterError = undefined;
+        break;
+      } catch (e) {
+        if (opts.signal?.aborted) {
+          throw new AllInOneError("streaming invocation cancelled by the caller", "PROVIDER_CANCELLED", "unavailable", {
+            retryable: false,
+          });
+        }
+        if (e instanceof AllInOneError && !e.retryable) throw e;
+        lastIterError = e;
+        // Retry ONLY while no event has been delivered.
+        if (delivered > 0) break;
+        if (attempt < this.maxRetries && this.retryBackoffMs > 0) {
+          await delay(this.retryBackoffMs * (attempt + 1));
+        }
+      }
+    }
+
+    if (assembled === undefined) {
+      if (lastStatus === 429) {
+        throw new AllInOneError(
+          `${this.id} rate-limited the request (HTTP 429): failed after ${this.maxRetries + 1} attempts`,
+          "PROVIDER_RATE_LIMITED",
+          "unavailable",
+          { retryable: true },
+        );
+      }
+      if (lastIterError instanceof AllInOneError) throw lastIterError;
+      const wasInterrupted = delivered > 0;
+      throw new AllInOneError(
+        wasInterrupted
+          ? `${this.id} interrupted the stream after ${delivered} event(s): ${describe(lastIterError)}`
+          : `Request to ${this.id} failed after ${this.maxRetries + 1} attempts: ${describe(lastIterError)}`,
+        wasInterrupted ? "PROVIDER_STREAM_INTERRUPTED" : "PROVIDER_UNREACHABLE",
+        "unavailable",
+        { retryable: !wasInterrupted, cause: lastIterError },
+      );
+    }
+
+    const { text, toolCalls, finishReason, usageChunk } = assembled;
+    if (!text && toolCalls.length === 0) {
+      throw new AllInOneError(`${this.id} returned an empty completion`, "PROVIDER_CALL_FAILED", "unavailable", {
+        retryable: false,
+      });
+    }
+
+    const usageBody = { usage: usageChunk } as ChatCompletionResponse;
+    const costUsd = estimateCostFromUsage(usageBody, this.pricing, modelName);
+
+    return {
+      providerId: this.id,
+      modelId: request.model,
+      capability: request.capability,
+      ok: true,
+      text,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      structured: request.structuredOutputSchema ? safeParseJson(text) : undefined,
+      costUsd,
+      latencyMs: Date.now() - started,
+      finishReason,
+      raw: undefined,
     };
   }
 }
@@ -371,7 +572,7 @@ function describe(e: unknown): string {
 }
 
 const defaultTransport: HttpTransport = {
-  async post(url: string, body: unknown, headers: Record<string, string>): Promise<HttpResponse> {
+  async post(url: string, body: unknown, headers: Record<string, string>, signal?: AbortSignal): Promise<HttpResponse> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
     try {
@@ -379,7 +580,7 @@ const defaultTransport: HttpTransport = {
         method: "POST",
         headers,
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal: signal ?? controller.signal,
       });
       const parsed = (await response.json()) as unknown;
       return { status: response.status, body: parsed };
@@ -387,4 +588,133 @@ const defaultTransport: HttpTransport = {
       clearTimeout(timer);
     }
   },
+
+  /**
+   * Streaming transport seam (D11). The AbortSignal reaches `fetch` itself,
+   * so a cancelled/timed-out invocation tears down the socket, not merely
+   * the caller's wait. The returned body is a raw-byte stream parsed by
+   * `parseSseEvents`; nothing here invents cost or text.
+   */
+  async postStream(
+    url: string,
+    body: unknown,
+    headers: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<StreamTransportResponse> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: signal ?? controller.signal,
+      });
+      if (!response.body) {
+        throw new Error(`${url} returned no streamable body`);
+      }
+      return { status: response.status, events: parseSseEvents(response.body) };
+    } finally {
+      clearTimeout(timer);
+    }
+  },
 };
+
+/**
+ * Parse an SSE stream of OpenAI-compatible chat-completion frames into
+ * StreamEvents. Tolerates `: keepalive` comments and blank separators; an
+ * unparseable `data:` payload becomes a typed failure — it is never
+ * swallowed, and no partial content is reported as complete.
+ */
+async function* parseSseEvents(
+  stream: ReadableStream<Uint8Array>,
+): AsyncIterable<StreamEvent> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        for (const event of eventsFromBlock(block)) yield event;
+      }
+    }
+    buffer += decoder.decode();
+    // A trailing block with no terminating blank line still yields its events
+    // only if it is a complete, parseable frame — never a guess.
+    const tail = buffer.trim();
+    if (tail.length > 0) {
+      try {
+        for (const event of eventsFromBlock(tail)) yield event;
+      } catch (e) {
+        throw e;
+      }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* the socket may already be closed by an abort — that is the point */
+    }
+  }
+}
+
+function eventsFromBlock(block: string): StreamEvent[] {
+  const events: StreamEvent[] = [];
+  for (const rawLine of block.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith(":")) continue;
+    if (!line.startsWith("data:")) continue;
+    const payload = line.slice(5).trim();
+    if (payload === "[DONE]") return events;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(payload);
+    } catch {
+      throw new AllInOneError(`Provider sent an unparseable SSE frame: ${redact(payload.slice(0, 120))}`, "PROVIDER_CALL_FAILED", "unavailable", {
+        retryable: false,
+      });
+    }
+    const chunk = parsed as ChatCompletionResponse & { error?: { message?: string } };
+    if (chunk.error) {
+      throw new AllInOneError(
+        `Provider returned an error frame: ${redact(String(chunk.error.message ?? "unknown"))}`,
+        "PROVIDER_CALL_FAILED",
+        "unavailable",
+        { retryable: false },
+      );
+    }
+    if (chunk.usage) {
+      events.push({
+        kind: "usage",
+        promptTokens: chunk.usage.prompt_tokens,
+        completionTokens: chunk.usage.completion_tokens,
+        totalTokens: chunk.usage.total_tokens,
+      });
+    }
+    const choice = chunk.choices?.[0] as
+      | { delta?: { content?: string; tool_calls?: ReadonlyArray<ChatCompletionToolCall> }; finish_reason?: string }
+      | undefined;
+    const content = choice?.delta?.content;
+    if (typeof content === "string" && content.length > 0) events.push({ kind: "text", text: content });
+    if (Array.isArray(choice?.delta?.tool_calls)) {
+      for (const call of choice!.delta!.tool_calls!) {
+        const index = typeof (call as unknown as { index?: number }).index === "number" ? (call as unknown as { index: number }).index : 0;
+        events.push({
+          kind: "tool-call-delta",
+          index,
+          id: typeof call.id === "string" ? call.id : undefined,
+          toolName: typeof call.function?.name === "string" ? call.function.name : undefined,
+          argumentsDelta: typeof call.function?.arguments === "string" ? call.function.arguments : undefined,
+        });
+      }
+    }
+    if (choice?.finish_reason) events.push({ kind: "finish", finishReason: choice.finish_reason });
+  }
+  return events;
+}

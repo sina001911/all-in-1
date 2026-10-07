@@ -24,6 +24,7 @@
  * any required approval.
  */
 import type { ModelCatalog } from "../models/catalog.ts";
+import type { StreamEvent } from "./types.ts";
 import type { CapabilityRegistry } from "../capabilities/registry.ts";
 import type { PriorityChains } from "../models/priorities.ts";
 import type { ApprovalStore } from "../registry/approvals.ts";
@@ -70,6 +71,12 @@ export interface InvokeOptions {
   readonly timeoutMs?: number;
   /** Abort the call when this signal aborts (throws PROVIDER_CANCELLED). */
   readonly signal?: AbortSignal;
+  /**
+   * Streaming sink (D11). When the selected model supports streaming and the
+   * engine request says `streaming: true`, each provider frame is forwarded
+   * here. Non-streaming invocations simply never emit events.
+   */
+  readonly onStreamEvent?: (event: StreamEvent) => void;
 }
 
 /**
@@ -175,10 +182,53 @@ export class ExecutionEngine {
     // 6 + 7. INVOKE and SETTLE. The finally block guarantees the reservation
     // is released if the call throws, so the ledger cannot leak.
     let result: ProviderInvokeResult;
+    // One controller bounded by the caller's signal AND the engine timeout,
+    // so timeout/cancellation tear down the actual socket inside the adapter,
+    // not just the caller's wait. The adapter resolves its own typed errors
+    // from the aborted signal; this controller is the propagation vehicle.
+    const invokeController = new AbortController();
+    let invokeTimerFired = false;
+    if (options?.signal) {
+      if (options.signal.aborted) invokeController.abort();
+      else options.signal.addEventListener("abort", () => invokeController.abort(), { once: true });
+    }
+    let invokeTimer: ReturnType<typeof setTimeout> | undefined;
+    if (options?.timeoutMs !== undefined) {
+      invokeTimer = setTimeout(() => {
+        invokeTimerFired = true;
+        invokeController.abort();
+      }, options.timeoutMs);
+    }
     try {
-      result = await raceInvocation(adapter.invoke(invokeRequest), options);
+      result = await raceInvocation(
+        adapter.invoke(invokeRequest, {
+          stream: request.streaming === true,
+          onEvent: options?.onStreamEvent,
+          signal: invokeController.signal,
+        }),
+        options,
+      );
     } catch (e) {
       this.opts.budget.release(reserved);
+      // Cancellation is authoritative even when the transport error fires
+      // first: an aborted signal can never be relabelled a provider failure.
+      if (options?.signal?.aborted) {
+        throw new AllInOneError("invocation cancelled by the caller", "PROVIDER_CANCELLED", "unavailable", {
+          retryable: false,
+        });
+      }
+      if (invokeTimerFired) {
+        // The engine's own wall-clock timeout tore down the socket.
+        throw new AllInOneError(
+          `invocation exceeded the ${options?.timeoutMs}ms timeout`,
+          "PROVIDER_TIMEOUT",
+          "unavailable",
+          { retryable: true },
+        );
+      }
+      if (e instanceof AllInOneError && e.code === "PROVIDER_CANCELLED") {
+        throw e;
+      }
       if (e instanceof InvocationAbortedError) {
         throw new AllInOneError(e.message, e.code, "unavailable", {
           retryable: e.code === "PROVIDER_TIMEOUT",
@@ -189,6 +239,8 @@ export class ExecutionEngine {
         category: "unavailable",
         message: `Invocation of ${modelId} via ${adapter.id} failed: ${describe(e)}`,
       });
+    } finally {
+      if (invokeTimer !== undefined) clearTimeout(invokeTimer);
     }
 
     // Commit the ACTUAL cost, not the estimate. The reservation is released

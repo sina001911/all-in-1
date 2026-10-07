@@ -175,6 +175,35 @@ settings patch → sanitize (unchanged D8 boundary) → if `providers` changed �
   credentials, cancellation hub, tool runtime, and workspace roots are
   reused — hot-reload touches none of them.
 
+## D11 — Streaming Responses
+
+The OpenAI-compatible adapter can now stream:
+
+- A request with `streaming: true` sends `"stream": true` and
+  `"stream_options": { "include_usage": true }` and assembles the frame
+  stream back into the SAME `ProviderInvokeResult` contract as the
+  buffered path — the caller sees the assembled outcome; fragments travel
+  only onto the optional `InvokeOptions.onStreamEvent` sink.
+- Stream frames (`data:` / SSE with a tolerant keepalive tolerant parser,
+  same transport seam as `post`) are typed as `StreamEvent`: `text`,
+  `tool-call-delta`, `finish`, `usage`.
+- Retry is bounded and happens only BEFORE the first delivered event; once
+  any delta has flowed, a failure is typed `PROVIDER_STREAM_INTERRUPTED` —
+  never a replay, never a partial success.
+- Timeouts and caller cancellation abort the underlying socket, not just
+  the caller's wait: the `InvocationPortal`/engine passes one
+  `AbortController` through to the transport.
+- Cost derives from the provider's own usage frame (rate × reported
+  tokens); without a usage frame, cost is exactly 0 — nothing is invented.
+- User-declared models may set `streaming: true`; the selector only
+  routes streaming requests to models that declared it, so the honest
+  fallback for non-streaming descriptors is an honest `SELECTION_FAILED`,
+  never a silent buffer.
+- D10 holds: an in-flight stream continues on the pre-reload engine, and a
+  reload mid-stream installs the new engine for subsequent requests only.
+
+UI consumer for progressive rendering is deferred (D10 did not promise one).
+
 ## Commands (verified on Node 24.21.0 / npm 11.19.0)
 
 ```sh

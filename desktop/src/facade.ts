@@ -478,6 +478,8 @@ export class DesktopFacade {
     readonly available: boolean;
     readonly fixed: boolean;
     readonly tools: boolean;
+    /** Whether the descriptor advertises a streaming response (D11). */
+    readonly streaming: boolean;
   }> {
     return this.stack.core.stack.catalog.snapshot().map((m) => ({
       id: m.id,
@@ -490,6 +492,7 @@ export class DesktopFacade {
       available: m.available,
       fixed: Boolean(m.fixed),
       tools: m.tools,
+      streaming: m.streaming,
     }));
   }
 

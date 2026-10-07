@@ -102,6 +102,8 @@ export interface SettingsProviderModel {
   readonly outputLimit?: number;
   readonly tools?: boolean;
   readonly costPer1MUsd?: { readonly input: number; readonly output: number };
+  /** Whether the model declares a real streaming response (D11). */
+  readonly streaming?: boolean;
 }
 
 /** A provider the user registered (D7). No key VALUE ever lives here. */

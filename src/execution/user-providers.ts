@@ -33,6 +33,11 @@ export interface UserProvidedModel {
   readonly tools?: boolean;
   /** USD per 1M tokens. Omit for a free/local server. */
   readonly costPer1MUsd?: { readonly input: number; readonly output: number };
+  /**
+   * Whether the model genuinely streams (D11). Defaults to false: a model is
+   * only selectable for a streaming request when its descriptor says so.
+   */
+  readonly streaming?: boolean;
 }
 
 /** A provider a user wants the engine to talk to. */
@@ -160,7 +165,7 @@ export function registerUserProvider(
       outputLimit: Math.min(Math.max(m.outputLimit ?? 4_096, 256), 1_000_000),
       tools: m.tools ?? true,
       structuredOutput: false,
-      streaming: false,
+      streaming: m.streaming === true,
       pricing: {
         costClass: free ? "FREE" : "PAID",
         inputPer1M: m.costPer1MUsd?.input,
