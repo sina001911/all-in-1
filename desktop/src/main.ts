@@ -154,6 +154,9 @@ function registerHandlers(facade: DesktopFacade): void {
   ipcMain.handle("all-in-1:models:list", () => facade.listModels());
   ipcMain.handle("all-in-1:models:posture", () => facade.selectionPosture());
   ipcMain.handle("all-in-1:workspace:roots", () => facade.listWorkspaceRoots());
+  // D8: the warnings the D7 registration produced at startup, so the renderer
+  // can explain a skipped provider instead of pretending it worked.
+  ipcMain.handle("all-in-1:providers:warnings", () => facade.getProviderWarnings());
   // D6 folder picker. The renderer supplies NO path: it asks main to let the
   // user choose one. Main owns the dialog, and applies the result through the
   // sanitized settings write, so a directory can only enter the tool sandbox

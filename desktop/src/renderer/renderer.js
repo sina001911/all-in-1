@@ -996,6 +996,112 @@
     clear(frozenHost);
     var frozen = await api.getFrozenDefaults();
     frozenHost.appendChild(mono(JSON.stringify(frozen, null, 2)));
+
+    var warnHost = el("settings-provider-warnings");
+    clear(warnHost);
+    var warnings = await api.getProviderWarnings();
+    (warnings || []).forEach(function (w) {
+      warnHost.appendChild(h("div", { class: "card card-pad row" }, [Badge("skipped", "warn"), h("span", { class: "grow", text: w })]));
+    });
+
+    var providersHost = el("settings-providers");
+    clear(providersHost);
+    var settings = await api.getSettings();
+    var providers = (settings && settings.providers) || [];
+    if (providers.length === 0) {
+      providersHost.appendChild(EmptyState("No providers registered. The engine only ever reaches the built-in local models."));
+    } else {
+      providers.forEach(function (p) {
+        providersHost.appendChild(
+          h("div", { class: "card card-pad row" }, [
+            h("div", { class: "grow stack" }, [
+              h("span", { class: "mono", text: p.id + (p.displayName ? " — " + p.displayName : "") }),
+              h("span", { class: "muted mono", text: p.endpoint + " · " + (p.models || []).map(function (m) { return m.id; }).join(", ") }),
+            ]),
+            Button("Remove", {
+              small: true,
+              variant: "danger",
+              onClick: function () {
+                removeProvider(p.id);
+              },
+            }),
+          ]),
+        );
+      });
+    }
+    providersHost.appendChild(
+      Button("Add provider", {
+        onClick: function () {
+          addProvider();
+        },
+      }),
+    );
+  }
+
+  async function addProvider() {
+    var idInput = h("input", { id: "pv-id", type: "text", class: "input", placeholder: "e.g. ollama" });
+    var endpointInput = h("input", { id: "pv-endpoint", type: "text", class: "input", placeholder: "http://127.0.0.1:11434/v1" });
+    var keyInput = h("input", { id: "pv-keyenv", type: "text", class: "input", placeholder: "env var name, or empty for a local server" });
+    var modelsInput = h("input", { id: "pv-models", type: "text", class: "input", placeholder: "llama3, qwen2.5 (comma-separated)" });
+    var answer = await openModal(
+      "Add a model provider",
+      h("div", { class: "stack" }, [
+        h("p", { class: "muted", style: "margin:0", text: "A key travels only as an environment-variable name — the value is read at call time by the engine, never stored here." }),
+        h("label", { class: "field" }, [h("span", { text: "Id" }), idInput]),
+        h("label", { class: "field" }, [h("span", { text: "Endpoint" }), endpointInput]),
+        h("label", { class: "field" }, [h("span", { text: "Key env var" }), keyInput]),
+        h("label", { class: "field" }, [h("span", { text: "Models" }), modelsInput]),
+      ]),
+      { confirmLabel: "Add" },
+    );
+    if (!answer) return;
+    var id = String(idInput.value || "").trim();
+    var endpoint = String(endpointInput.value || "").trim();
+    var keyEnv = String(keyInput.value || "").trim();
+    var modelIds = String(modelsInput.value || "")
+      .split(",")
+      .map(function (s) { return s.trim(); })
+      .filter(function (s) { return s.length > 0; });
+    if (!id || !endpoint || modelIds.length === 0) {
+      toast("A provider needs an id, an endpoint, and at least one model.", "warn");
+      return;
+    }
+    var settings = await api.getSettings();
+    var existing = (settings && settings.providers) || [];
+    var next = existing.concat([
+      {
+        id: id,
+        displayName: id,
+        endpoint: endpoint,
+        apiKeyEnv: keyEnv || null,
+        models: modelIds.map(function (m) { return { id: m, displayName: m }; }),
+      },
+    ]);
+    var saved = await api.patchSettings({ providers: next });
+    if ((saved.providers || []).length === existing.length) {
+      toast("That provider was rejected (see above) — nothing was added.", "warn");
+    } else {
+      toast("Provider saved. Restart to make it reachable.", "ok");
+    }
+    await loadSettings();
+  }
+
+  async function removeProvider(id) {
+    var answer = await openModal(
+      "Remove " + id + "?",
+      h("p", { class: "muted", style: "margin:0", text: "Its models leave the catalogue after a restart." }),
+      { confirmLabel: "Remove", cancelLabel: "Keep" },
+    );
+    if (!answer) return;
+    var settings = await api.getSettings();
+    var existing = (settings && settings.providers) || [];
+    await api.patchSettings({
+      providers: existing.filter(function (p) {
+        return p.id !== id;
+      }),
+    });
+    toast("Provider removed. Restart to apply.", "warn");
+    await loadSettings();
   }
 
   async function setCredential(existingName) {

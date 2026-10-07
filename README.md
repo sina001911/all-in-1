@@ -128,6 +128,21 @@ The pipeline finally reaches a real model server. The additive surface:
 Everything remains inert under the frozen defaults: no providers registered,
 no hosts allowlisted, budget 0.
 
+## D8 — Provider Management in the App
+
+The provider path from D7 is now manageable from the desktop UI:
+
+- Settings → Model providers lists registered providers and offers Add /
+  Remove. The page sends a *description* only — an endpoint, an id, model
+  names, and an env-var NAME for the key — and the main-process settings
+  boundary validates and sanitizes it (`sanitizeProvider`). A key value can
+  never be entered or stored; changes apply after a restart, and the page
+  says so.
+- Startup registration warnings are surfaced, never swallowed: the stack's
+  `registrationWarnings` travel through `DesktopFacade.getProviderWarnings`
+  and the enumerated IPC channel `all-in-1:providers:warnings` to the
+  Settings view.
+
 ## Commands (verified on Node 24.21.0 / npm 11.19.0)
 
 ```sh

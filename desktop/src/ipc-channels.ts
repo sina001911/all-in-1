@@ -50,6 +50,9 @@ export const IPC_CHANNELS = [
   // choose a directory; it can never name one itself. Main owns the dialog and
   // performs the sanitized settings write, so a compromised renderer cannot
   // expand the tool sandbox by guessing a path.
+  // D7: the user may register providers; the renderer sees the warnings
+  // registration produced (surfaced, never silently swallowed).
+  "all-in-1:providers:warnings",
   "all-in-1:workspace:pick",
 ] as const;
 

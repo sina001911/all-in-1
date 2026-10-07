@@ -305,6 +305,11 @@ export class DesktopFacade {
     return this.stack.settingsStore.get();
   }
 
+  /** Warnings from D7 user-provider registration at startup. */
+  getProviderWarnings(): readonly string[] {
+    return this.stack.providerWarnings;
+  }
+
   patchSettings(patch: Partial<DesktopSettings>): DesktopSettings {
     return this.stack.settingsStore.patch(patch);
   }
