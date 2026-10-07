@@ -227,6 +227,14 @@ altering the result contract or persistence model:
 - Cancellation and timeout keep flowing through `CancellationHub` into the
   engine and adapter; no parallel cancellation mechanism is introduced.
 
+## D13 — Live SSE Acceptance
+
+The D11 adapter is now also exercised against a real loopback HTTP server:
+one socket, one SSE stream, the same gates and result contract, no fake
+transport. Cost comes only from the provider's usage frame; a hung body is
+aborted by the engine timeout, never waited on, and no budget reservation
+is ever committed as zero.
+
 ## Commands (verified on Node 24.21.0 / npm 11.19.0)
 
 ```sh
