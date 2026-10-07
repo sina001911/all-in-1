@@ -748,17 +748,58 @@
   /* Diagnostic (the 7-gate pipeline, preserved from D5) ---------------- */
 
   var diagRunId = null;
+  var diagStreamTimer = null;
+  var diagStreamCursor = 0;
+
+  function pushDiagStreamEvent(ev) {
+    var host = el("diag-output");
+    if (ev.kind === "text") host.textContent = (host.textContent || "") + ev.text;
+    else if (ev.kind === "tool-call-delta") host.textContent = (host.textContent || "") + "\n[tool fragment] ";
+    else if (ev.kind === "finish") host.textContent = (host.textContent || "") + "\n[finish]";
+  }
+
+  async function pollDiagStream(runId) {
+    try {
+      var env = await api.getWorkflowStream(runId, diagStreamCursor);
+      if (!env) return;
+      for (var i = 0; i < env.events.length; i++) pushDiagStreamEvent(env.events[i]);
+      diagStreamCursor = env.nextIndex;
+      if (env.state !== "running" && diagStreamTimer !== null) {
+        clearInterval(diagStreamTimer);
+        diagStreamTimer = null;
+      }
+    } catch (_e) {
+      // result is authoritative; clear the UI-only interval below if the
+      // renderer never sees state again.
+    }
+  }
+
+  function stopDiagStreamPoll() {
+    if (diagStreamTimer !== null) {
+      clearInterval(diagStreamTimer);
+      diagStreamTimer = null;
+    }
+  }
 
   async function runDiagnostic() {
     var out = el("diag-output");
     el("diag-cancel").disabled = false;
     text(out, "running…");
     try {
-      var result = await api.runDiagnostic({
+      var streaming = el("diag-stream") && el("diag-stream").checked;
+      var request = {
         mode: el("diag-mode").value,
         subject: el("diag-subject").value,
         auto: el("diag-auto").checked,
-      });
+      };
+      if (streaming) {
+        request.streaming = true;
+        request.runId = diagRunId || ("diag-" + Date.now().toString(36));
+        diagStreamCursor = 0;
+        stopDiagStreamPoll();
+        diagStreamTimer = setInterval(function () { pollDiagStream(request.runId); }, 300);
+      }
+      var result = await api.runDiagnostic(request);
       diagRunId = result.runId;
       text(out, result.text);
       if (result.ok) toast("Diagnostic complete.", "ok");
@@ -767,6 +808,7 @@
       clear(out);
       out.appendChild(ErrorPanel("DIAGNOSTIC", esc(e), null));
     } finally {
+      stopDiagStreamPoll();
       el("diag-cancel").disabled = true;
       await loadRuns();
       await refreshStatus();

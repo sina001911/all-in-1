@@ -64,6 +64,8 @@ export interface DesktopStack {
   readonly agentGateway: ProviderModelGateway;
   /** Progressive-stream bridge (D12): pull-only preview events, in memory only. */
   readonly streamBridge: AgentStreamBridge;
+  /** Workflow bridge (D16): separate from AgentStreamBridge to avoid runId bleed. */
+  readonly workflowStreamBridge: AgentStreamBridge;
   /** Warnings from user-provider registration (D7), shown in the UI. Live: reflects the current stack after a reload. */
   readonly providerWarnings: readonly string[];
   /**
@@ -176,6 +178,7 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
     agent,
     agentGateway,
     streamBridge: new AgentStreamBridge(),
+    workflowStreamBridge: new AgentStreamBridge(),
     // D7: the warnings from user-provider registration, surfaced in the UI so a
     // bad entry is explained rather than silently ignored. Live after reload.
     get providerWarnings() {

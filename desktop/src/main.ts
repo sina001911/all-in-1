@@ -218,6 +218,16 @@ function registerHandlers(facade: DesktopFacade): void {
     // from `error`; StreamEvent's text is assembled when the run finished.
     return envelope ?? null;
   });
+  ipcMain.handle("all-in-1:workflow:stream", (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("Invalid stream query");
+    const q = raw as Record<string, unknown>;
+    if (typeof q.runId !== "string") throw new Error("runId must be a string");
+    if (typeof q.cursor !== "number" || !Number.isFinite(q.cursor) || q.cursor < 0) {
+      throw new Error("cursor must be a non-negative finite number");
+    }
+    const envelope = facade.getWorkflowStream(q.runId, q.cursor);
+    return envelope ?? null;
+  });
 }
 
 /**

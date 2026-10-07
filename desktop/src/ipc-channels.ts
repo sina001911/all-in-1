@@ -43,6 +43,8 @@ export const IPC_CHANNELS = [
   "all-in-1:agent:tools",
   "all-in-1:agent:run",
   "all-in-1:agent:stream",
+  // D16: workflow stream mirrors agent bridge contract with a distinct run namespace.
+  "all-in-1:workflow:stream",
   // D5 read-only model/provider and workspace views
   "all-in-1:models:list",
   "all-in-1:models:posture",

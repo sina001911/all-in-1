@@ -43,8 +43,12 @@ export interface DiagnosticRequest {
   readonly auto?: boolean;
   /** Produce a plan summary (requires plan permission). */
   readonly plan?: boolean;
+  /** Optional caller-supplied run id; generated when absent. */
+  readonly runId?: string;
   /** Per-step invocation timeout forwarded to the engine. */
   readonly timeoutMs?: number;
+  /** Request progressive streaming frames from the engine path. */
+  readonly streaming?: boolean;
 }
 
 export interface DiagnosticResult {
@@ -124,9 +128,17 @@ export class DesktopFacade {
    * dependency on any host.
    */
   async runDiagnostic(req: DiagnosticRequest): Promise<DiagnosticResult> {
-    const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Keep the runId stable when the caller provides one; otherwise generate it
+    // exactly once so cancellation, persistence and streaming all see the same id.
+    const runId = typeof req.runId === "string" && req.runId.trim().length > 0
+      ? req.runId.trim()
+      : `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const streaming = req.streaming === true;
     const signal = this.stack.cancellation.signalFor(runId);
     const startedAt = Date.now();
+    if (streaming) {
+      this.stack.workflowStreamBridge.start(runId);
+    }
 
     this.stack.runStore.record({
       id: runId,
@@ -158,12 +170,24 @@ export class DesktopFacade {
           inputs: subject ? [{ kind: "text", text: subject }] : [],
           outputSchema: {},
         })),
+        // D16: optional progressive events for the diagnostic stream bridge.
+        streaming: streaming || undefined,
+        onStreamEvent: streaming
+          ? (e) => this.stack.workflowStreamBridge.append(runId, e)
+          : undefined,
       },
     });
 
     let result: WorkflowResult;
     try {
       result = await loop.run();
+      if (streaming) {
+        if (result.ok) this.stack.workflowStreamBridge.done(runId);
+        else this.stack.workflowStreamBridge.failed(runId, {
+          code: result.error?.code ?? "WORKFLOW_FAILED",
+          message: result.ok ? "diagnostic stream completed" : "diagnostic stream failed",
+        });
+      }
     } catch (e) {
       this.stack.runStore.update(runId, {
         finishedAt: Date.now(),
@@ -171,6 +195,12 @@ export class DesktopFacade {
         ok: false,
         errorCode: "WORKFLOW_FAILED",
       });
+      if (streaming) {
+        this.stack.workflowStreamBridge.failed(runId, {
+          code: "WORKFLOW_FAILED",
+          message: "diagnostic stream failed",
+        });
+      }
       this.stack.cancellation.release(runId);
       return {
         runId,
@@ -487,6 +517,15 @@ export class DesktopFacade {
     readonly nextIndex: number;
   } | undefined {
     return this.stack.streamBridge.getSince(runId, cursor);
+  }
+
+  getWorkflowStream(runId: string, cursor: number): {
+    readonly events: readonly import("../../src/execution/types.ts").StreamEvent[];
+    readonly state: "running" | "done" | "failed";
+    readonly error?: { readonly code: string; readonly message: string };
+    readonly nextIndex: number;
+  } | undefined {
+    return this.stack.workflowStreamBridge.getSince(runId, cursor);
   }
 
   // ---- models & providers (D5) --------------------------------------

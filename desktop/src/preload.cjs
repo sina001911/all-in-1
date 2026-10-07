@@ -41,6 +41,7 @@ const api = {
   listAgentTools: (mode) => ipcRenderer.invoke("all-in-1:agent:tools", mode),
   runAgent: (request) => ipcRenderer.invoke("all-in-1:agent:run", request),
   getAgentStream: (runId, cursor) => ipcRenderer.invoke("all-in-1:agent:stream", { runId, cursor }),
+  getWorkflowStream: (runId, cursor) => ipcRenderer.invoke("all-in-1:workflow:stream", { runId, cursor }),
   // D5 read-only views
   listModels: () => ipcRenderer.invoke("all-in-1:models:list"),
   getSelectionPosture: () => ipcRenderer.invoke("all-in-1:models:posture"),

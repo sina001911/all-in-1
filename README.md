@@ -259,6 +259,20 @@ an operator without a desktop UI. It shares the engine/transport contract:
 - the final workflow contract is unchanged: buffered `StepResult`/`WorkflowResult`
   objects, no persistence side effect, same timeout/signal propagation.
 
+## D16 — Workflow Stream Desktop Bridge
+
+Desktop can now stream the diagnostic workflow progressively while keeping
+the final `DiagnosticResult` authoritative:
+
+- `DiagnosticRequest.streaming` turns on bridge emission; `runId` is optional
+  and generated once when absent; both forwarded to the workflow bridge.
+- `DesktopFacade.getWorkflowStream(runId, cursor)` summarizes what has
+  arrived so the renderer can show progressive rows without a push channel.
+- Workflow stream events in the desktop renderer stay UI-only; final
+  `DiagnosticResult.text` replaces the preview.
+- Agent bridge (`getAgentStream`) is untouched; workflow has its own
+  independent runId namespace via `workflowStreamBridge`.
+
 ## Commands (verified on Node 24.21.0 / npm 11.19.0)
 
 ```sh
