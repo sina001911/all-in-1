@@ -248,6 +248,17 @@ an operator without a desktop UI. It shares the engine/transport contract:
 
 `invoke` is unchanged: no frames on stderr, one final JSON on stdout.
 
+## D15 — Workflow Streaming
+
+`WorkflowLoop` and specialist runner now have an opt-in streaming path:
+
+- `WorkflowRequest.streaming` and an optional `onStreamEvent` sink forward
+  into `SpecialistRunner.run` for every step;
+- the runner marks the selection request streaming so the engine can stream
+  the resulting provider frames;
+- the final workflow contract is unchanged: buffered `StepResult`/`WorkflowResult`
+  objects, no persistence side effect, same timeout/signal propagation.
+
 ## Commands (verified on Node 24.21.0 / npm 11.19.0)
 
 ```sh

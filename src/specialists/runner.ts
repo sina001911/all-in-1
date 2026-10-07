@@ -68,6 +68,9 @@ export class SpecialistRunner {
       capability,
       inputs: request.inputs,
       structuredOutput: true,
+      // D15: opt-in streaming is tracked on the request and forwarded to the
+      // engine; the final result is still a single structured payload.
+      streaming: request.streaming === true,
     };
 
     let outcome;

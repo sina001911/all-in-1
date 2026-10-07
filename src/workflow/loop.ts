@@ -21,6 +21,7 @@
  */
 import type { SpecialistRequest, SpecialistResponse } from "../specialists/types.ts";
 import type { SpecialistRunner } from "../specialists/runner.ts";
+import type { StreamEvent } from "../execution/types.ts";
 import type { ModelRole } from "../registry/roles.ts";
 import {
   DEFAULT_AUTO_OPTIONS,
@@ -49,6 +50,10 @@ export interface WorkflowRequest {
   readonly signal?: AbortSignal;
   /** Per-step invocation timeout, forwarded to the engine. */
   readonly timeoutMs?: number;
+  /** Prime every step for the streaming engine path; passive if steps do not stream. */
+  readonly streaming?: boolean;
+  /** Progressive events emitted by each step when the engine path streams. */
+  readonly onStreamEvent?: (event: StreamEvent) => void;
 }
 
 export interface StepResult {
@@ -153,12 +158,17 @@ export class WorkflowLoop {
         }
       }
 
-      const step = this.request.steps[this.cursor] as SpecialistRequest;
+      const baseStep = this.request.steps[this.cursor] as SpecialistRequest;
+      const streamingStep =
+        this.request.streaming === true && baseStep.streaming !== false
+          ? ({ ...baseStep, streaming: true } satisfies SpecialistRequest)
+          : baseStep;
       let response: SpecialistResponse;
       try {
-        response = await this.runner.run(step, {
+        response = await this.runner.run(streamingStep, {
           timeoutMs: this.request.timeoutMs,
           signal: this.request.signal,
+          onStreamEvent: this.request.streaming === true ? this.request.onStreamEvent : undefined,
         });
       } catch (e) {
         // The runner converts engine failures into a SpecialistResponse; a
@@ -166,7 +176,7 @@ export class WorkflowLoop {
         return this.toResult(false, toError(e));
       }
 
-      this.results.push({ role: step.role, response });
+      this.results.push({ role: baseStep.role, response });
       this.cursor += 1;
 
       if (!response.ok) {

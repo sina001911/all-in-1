@@ -16,6 +16,8 @@ export interface SpecialistRequest {
     | { readonly kind: "image"; readonly artifactId: string }
   >;
   readonly outputSchema: object;
+  /** Opt-in streaming on the engine invocation; buffered result contract stays. */
+  readonly streaming?: boolean;
 }
 
 export type SpecialistResponse =
