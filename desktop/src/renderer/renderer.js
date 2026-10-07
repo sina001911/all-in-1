@@ -436,24 +436,87 @@
       el("agent-prompt").focus();
       return;
     }
+    // D12: the progressive stream must be torn down even on cancel/throw, so
+    // its state is fully reset BEFORE the try.
     state.busy = true;
+    state.liveStream = null;
     el("agent-run").disabled = true;
     el("agent-cancel").disabled = false;
     text(el("transcript"), "");
     var transcript = el("transcript");
     clear(transcript);
     transcript.appendChild(SkeletonRow(3));
+    var streaming = el("agent-stream") ? el("agent-stream").checked !== false : false;
+    var streamCursor = 0;
+    var streamTimer = null;
+    var streamRow = null;
+
+    function stopStreamPoll() {
+      if (streamTimer !== null) {
+        clearInterval(streamTimer);
+        streamTimer = null;
+      }
+    }
+
+    function pushStreamRow(ev) {
+      // One incremental row per run: progressive text arrives as text chunks;
+      // tool-call frames summarize as they are produced. The final AgentResult
+      // replaces the entire row so there is no duplicate tail.
+      if (!streamRow) {
+        streamRow = h("div", { class: "turn turn-assistant", id: "agent-live-row" }, [
+          h("div", { class: "turn-head" }, [Badge("model")]),
+          h("div", { class: "turn-body", id: "agent-live-body" }, [SkeletonRow(1)]),
+        ]);
+        clear(transcript);
+        transcript.appendChild(streamRow);
+      }
+      var body = document.getElementById("agent-live-body");
+      if (ev.kind === "text") {
+        if (!state.liveStream) state.liveStream = "";
+        state.liveStream += ev.text;
+        text(body, state.liveStream);
+      } else if (ev.kind === "tool-call-delta") {
+        text(body, (state.liveStream || "") + "\n→ tool fragment…");
+      } else if (ev.kind === "finish") {
+        /* final shape is asserted when AgentResult arrives */
+      }
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+
+    async function pollStream() {
+      try {
+        var env = await api.getAgentStream(state.runId || "pending-" + Date.now().toString(36), streamCursor);
+        if (!env) return;
+        for (var i = 0; i < env.events.length; i++) pushStreamRow(env.events[i]);
+        streamCursor = env.nextIndex;
+        if (env.state !== "running") stopStreamPoll();
+      } catch (_e) {
+        /* the run promise is the authoritative final word; polling must never mask it */
+      }
+    }
+
+    // D12: opt-in progressive events in the UI only. The run is still
+    // single-buffered in the core contract — the progressive frames feed the
+    // live preview row, never the persistence layer.
+    if (streaming) {
+      var earlyRunId = state.runId || "pending-" + Date.now().toString(36);
+      state.runId = earlyRunId;
+      streamTimer = setInterval(pollStream, 300);
+    }
     try {
       var result = await api.runAgent({
         runId: state.runId || "ui-" + Date.now().toString(36),
         prompt: prompt,
         mode: state.mode,
         auto: el("agent-auto").checked ? { auto: true } : undefined,
+        streaming: streaming,
       });
       state.runId = result.runId || "";
       el("agent-run-id").value = state.runId;
       el("agent-prompt").value = "";
       state.lastResult = result;
+      // One final render REPLACES, never appends: the pending stream row and
+      // its skeleton are replaced by the assembled history.
       renderTranscript(result);
       if (result.escalated) toast("Escalated: the run paused for intervention.", "warn");
       else if (result.pausedForHuman) toast("Paused for you. Send again on the same run id to continue.", "info");
@@ -464,6 +527,8 @@
       clear(el("transcript"));
       el("transcript").appendChild(ErrorPanel("RENDERER", esc(e), null));
     } finally {
+      stopStreamPoll();
+      state.liveStream = null;
       state.busy = false;
       el("agent-run").disabled = false;
       el("agent-cancel").disabled = true;

@@ -201,7 +201,22 @@ function registerHandlers(facade: DesktopFacade): void {
       auto: req.auto && typeof req.auto === "object" ? (req.auto as Record<string, unknown>) : undefined,
       tools: Array.isArray(req.tools) ? (req.tools as string[]).filter((t) => typeof t === "string") : undefined,
       timeoutMs: typeof req.timeoutMs === "number" ? req.timeoutMs : undefined,
+      // D12: opt-in streaming flag on every run request; the bridge sink is
+      // main-side, the renderer never supplies the event stream itself.
+      streaming: req.streaming === true,
     });
+  });
+  ipcMain.handle("all-in-1:agent:stream", (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("Invalid stream query");
+    const q = raw as Record<string, unknown>;
+    if (typeof q.runId !== "string") throw new Error("runId must be a string");
+    if (typeof q.cursor !== "number" || !Number.isFinite(q.cursor) || q.cursor < 0) {
+      throw new Error("cursor must be a non-negative finite number");
+    }
+    const envelope = facade.getAgentStream(q.runId, q.cursor);
+    // JSON-safe envelope: the bucket owner already stripped anything sensitive
+    // from `error`; StreamEvent's text is assembled when the run finished.
+    return envelope ?? null;
   });
 }
 

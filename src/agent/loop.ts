@@ -195,12 +195,14 @@ export class AgentRuntime {
         mode: req.mode,
         history: [...run.history],
         tools: run.visible,
+        streaming: req.streaming === true,
       };
       let turn;
       try {
         turn = await this.opts.gateway.turn(gatewayRequest, {
           signal: req.signal,
           timeoutMs: req.timeoutMs,
+          onStreamEvent: req.onStreamEvent,
         });
       } catch (e) {
         const err = toError(e);

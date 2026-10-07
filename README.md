@@ -204,6 +204,29 @@ The OpenAI-compatible adapter can now stream:
 
 UI consumer for progressive rendering is deferred (D10 did not promise one).
 
+## D12 — Progressive Agent UI
+
+The agent turn now supports an opt-in streaming preview channel without
+altering the result contract or persistence model:
+
+- `AgentRequest.streaming` / `GatewayTurnRequest.streaming` forward through
+  the loop into `ProviderModelGateway.turn`, into the engine, and onto the
+  adapter — so a streaming turn is still gated by the same gates,
+  settling, and cost machinery.
+- `AgentStreamBridge` is the main-process in-memory bridge: keyed by run id,
+  cursor-advanced, bounded, and terminated as done/failed. It never
+  persists, never writes into RunStore/UsageStore, and never confuses two
+  concurrent runs.
+- A new enumerated IPC channel `all-in-1:agent:stream` lets the renderer
+  pull progressive frames; the renderer still assembles the final transcript
+  from `AgentResult` alone. The final render REPLACES any in-progress row,
+  so nothing is duplicated.
+- Local deterministic models advertise `streaming: true` and satisfy a
+  streaming request with exactly one complete text frame + one finish frame —
+  no token-level claim.
+- Cancellation and timeout keep flowing through `CancellationHub` into the
+  engine and adapter; no parallel cancellation mechanism is introduced.
+
 ## Commands (verified on Node 24.21.0 / npm 11.19.0)
 
 ```sh

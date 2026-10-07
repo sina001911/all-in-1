@@ -26,6 +26,7 @@ import type { SafetyMode } from "../safety/guard.ts";
 import type { AutoOptions } from "../safety/guard.ts";
 import type { ToolSchema } from "../tools/types.ts";
 import type { ToolResult } from "../tools/types.ts";
+import type { StreamEvent } from "../execution/types.ts";
 
 /** One tool call, as emitted by the model. A request — never a command. */
 export interface ToolCall {
@@ -77,7 +78,13 @@ export interface ModelGateway {
   readonly id: string;
   turn(
     request: GatewayTurnRequest,
-    options?: { readonly signal?: AbortSignal; readonly timeoutMs?: number },
+    // D12: same options shape as engine invoke calls, with an optional
+    // progressive-event sink attached.
+    options?: {
+      readonly signal?: AbortSignal;
+      readonly timeoutMs?: number;
+      readonly onStreamEvent?: (event: StreamEvent) => void;
+    },
   ): Promise<GatewayTurnResult>;
 }
 
@@ -88,6 +95,8 @@ export interface GatewayTurnRequest {
   readonly history: readonly TurnEvent[];
   /** The tools the model may call, already filtered to what the mode permits. */
   readonly tools: readonly ToolSchema[];
+  /** Opt into a streaming turn; the default buffered result contract is kept. */
+  readonly streaming?: boolean;
 }
 
 export interface GatewayTurnResult {
@@ -117,6 +126,16 @@ export interface AgentRequest {
   readonly timeoutMs?: number;
   /** Abort the run. Releases any pending approval and stops the loop. */
   readonly signal?: AbortSignal;
+  /**
+   * Ask the selected model to stream. Opt-in; the default run is
+   * single-buffered. Forwarded per turn to the gateway options.
+   */
+  readonly streaming?: boolean;
+  /**
+   * Progressive-event sink for the streamed turn. The core never persists
+   * these; they are derived from the same ProviderInvokeResult contract.
+   */
+  readonly onStreamEvent?: (event: StreamEvent) => void;
 }
 
 export interface AgentResult {

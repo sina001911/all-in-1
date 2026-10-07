@@ -40,6 +40,7 @@ import type {
 import { resolveDataPaths, type DataPaths } from "./persistence/paths.ts";
 import { LogStoreSink } from "./log-sink.ts";
 import { CancellationHub } from "./cancellation.ts";
+import { AgentStreamBridge } from "./stream-bridge.ts";
 import type { CredentialProvider } from "./credentials/types.ts";
 import { InteractiveToolApprover } from "./tools/approver.ts";
 import { FileToolAuditStore } from "./tools/audit-store.ts";
@@ -61,6 +62,8 @@ export interface DesktopStack {
   readonly workspaceRoots: DesktopWorkspaceRoots;
   readonly agent: AgentRuntime;
   readonly agentGateway: ProviderModelGateway;
+  /** Progressive-stream bridge (D12): pull-only preview events, in memory only. */
+  readonly streamBridge: AgentStreamBridge;
   /** Warnings from user-provider registration (D7), shown in the UI. Live: reflects the current stack after a reload. */
   readonly providerWarnings: readonly string[];
   /**
@@ -172,6 +175,7 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
     workspaceRoots,
     agent,
     agentGateway,
+    streamBridge: new AgentStreamBridge(),
     // D7: the warnings from user-provider registration, surfaced in the UI so a
     // bad entry is explained rather than silently ignored. Live after reload.
     get providerWarnings() {

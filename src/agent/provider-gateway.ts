@@ -67,6 +67,9 @@ export class ProviderModelGateway implements ModelGateway {
           structuredOutput: false,
           toolDeclarations: request.tools.map(toDeclaration),
           preference: this.opts.preference,
+          // D11: opt-in streaming. Keeps the same result contract; events only
+          // travel if the caller's InvokeOptions carry an onStreamEvent.
+          streaming: request.streaming === true,
         },
         options,
       );

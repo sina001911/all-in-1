@@ -437,23 +437,56 @@ export class DesktopFacade {
    */
   async runAgent(request: AgentRequest): Promise<AgentResult> {
     const signal = this.stack.cancellation.signalFor(request.runId);
-    const settled = await this.stack.agent.run({ ...request, signal });
-    this.stack.cancellation.release(request.runId);
-
-    // A cancelled run leaves the approval it raised DANGLING: the executor stops
-    // waiting (its `raceAbort` rejects), but the request is still recorded as
-    // PENDING and nothing will ever answer it — a leak and a lie in the UI, which
-    // would keep showing a decision the run can no longer use. Disposal is a
-    // denial, never an approval, so the facade denies whatever THIS run left
-    // open. Another run's pending requests are untouched.
-    if (signal.aborted) {
-      for (const pending of this.stack.toolApprover.listPending()) {
-        if (pending.runId === request.runId) {
-          this.stack.toolApprover.deny(pending.id, "run cancelled by the caller");
+    // D12: the bridge sees the progressive frames; it is in-memory only and
+    // keyed by run id, so there is no persistence side effect involved.
+    const streaming = request.streaming === true;
+    this.stack.streamBridge.start(request.runId);
+    const appendEvent = (e: import("../../src/execution/types.ts").StreamEvent) =>
+      this.stack.streamBridge.append(request.runId, e);
+    try {
+      const settled = await this.stack.agent.run({
+        ...request,
+        signal,
+        // D11/D12 opt-in: when streaming was requested, every turn forwards
+        // the progressive frames; the result contract is unchanged.
+        streaming,
+        onStreamEvent: streaming ? appendEvent : undefined,
+      });
+      this.stack.streamBridge.done(request.runId);
+      return settled;
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      this.stack.streamBridge.failed(request.runId, {
+        code: err.code ?? "PROVIDER_CALL_FAILED",
+        message: (err.message ?? "unknown error").slice(0, 280),
+      });
+      throw e;
+    } finally {
+      this.stack.cancellation.release(request.runId);
+      // A cancelled run leaves any raised approval DANGLING: denial is the
+      // conservative end state so no decision it raised can outlive it.
+      if (signal.aborted) {
+        for (const pending of this.stack.toolApprover.listPending()) {
+          if (pending.runId === request.runId) {
+            this.stack.toolApprover.deny(pending.id, "run cancelled by the caller");
+          }
         }
       }
     }
-    return settled;
+  }
+
+  /**
+   * Where the run's progressive frames are. The renderer polls this; the
+   * gateway itself never touches persistence. Absence of the run (never
+   * started or released) answers with `undefined`.
+   */
+  getAgentStream(runId: string, cursor: number): {
+    readonly events: readonly import("../../src/execution/types.ts").StreamEvent[];
+    readonly state: "running" | "done" | "failed";
+    readonly error?: { readonly code: string; readonly message: string };
+    readonly nextIndex: number;
+  } | undefined {
+    return this.stack.streamBridge.getSince(runId, cursor);
   }
 
   // ---- models & providers (D5) --------------------------------------
