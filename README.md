@@ -235,6 +235,19 @@ transport. Cost comes only from the provider's usage frame; a hung body is
 aborted by the engine timeout, never waited on, and no budget reservation
 is ever committed as zero.
 
+## D14 — Operator CLI Stream
+
+`node src/cli.ts stream <capability>` exposes the D11/D12 streaming path to
+an operator without a desktop UI. It shares the engine/transport contract:
+
+- stdout stays final-machine-readable JSON (same fields as `invoke`);
+- stderr carries each `StreamEvent` as `data: {...}` for operator logging;
+- `--provider-json`/`--provider-file` and `--allow-host` feed the same
+  `buildExecutionStack` wiring as `invoke`;
+- `--timeout` and SIGINT both flow into the engine's abort path.
+
+`invoke` is unchanged: no frames on stderr, one final JSON on stdout.
+
 ## Commands (verified on Node 24.21.0 / npm 11.19.0)
 
 ```sh

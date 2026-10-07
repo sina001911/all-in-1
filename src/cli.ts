@@ -31,6 +31,8 @@ import { ModelCatalog } from "./models/catalog.ts";
 import { CapabilityRegistry } from "./capabilities/registry.ts";
 import { registerBaselineCapabilities } from "./capabilities/capabilities.ts";
 import { PriorityChains } from "./models/priorities.ts";
+import type { UserProvidedProvider } from "./execution/user-providers.ts";
+import { readFileSync } from "node:fs";
 import { ExecutionEngine } from "./execution/engine.ts";
 import { select } from "./execution/selector.ts";
 import { buildExecutionStack } from "./execution/stack.ts";
@@ -115,6 +117,40 @@ function schemaFromFlag(raw: string | undefined): object {
     /* fall through: a non-empty unparseable value is still a schema attempt */
   }
   return { description: String(raw) };
+}
+
+/** Parse --provider-json / --provider-file flags into UserProvidedProvider entries. */
+function providersFromFlags(flags: FlagBag): { providers: UserProvidedProvider[] | undefined; error?: string } {
+  const out: UserProvidedProvider[] = [];
+  for (let i = 0; i < flags.getAll("provider-json").length; i++) {
+    const raw = flags.getAll("provider-json")[i];
+    try {
+      const parsed = JSON.parse(raw ?? "");
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) out.push(parsed as UserProvidedProvider);
+      else return { providers: undefined, error: "--provider-json must be one object" };
+    } catch {
+      return { providers: undefined, error: "--provider-json must be valid JSON" };
+    }
+  }
+  for (const file of flags.getAll("provider-file")) {
+    let raw: string;
+    try {
+      raw = readFileSync(resolve(file), "utf8");
+    } catch (e) {
+      return { providers: undefined, error: `cannot read --provider-file: ${file}` };
+    }
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      const list = Array.isArray(parsed) ? parsed : [parsed];
+      for (const entry of list) {
+        if (entry && typeof entry === "object" && !Array.isArray(entry)) out.push(entry as UserProvidedProvider);
+        else return { providers: undefined, error: "--provider-file must contain an object or array of objects" };
+      }
+    } catch {
+      return { providers: undefined, error: `--provider-file ${file} is not valid JSON` };
+    }
+  }
+  return { providers: out.length > 0 ? out : undefined };
 }
 
 async function main(): Promise<void> {
@@ -480,9 +516,89 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === "stream") {
+    const capability = args[0];
+    if (!capability) {
+      console.error(JSON.stringify({ ok: false, error: "capability required" }));
+      process.exitCode = 1;
+      return;
+    }
+    const flags = parseFlags(args.slice(1));
+    const text = flags.get("text") ?? "";
+    const policy = (flags.get("policy") as "FREE_ONLY" | "PREMIUM_ALLOWED") ?? "FREE_ONLY";
+    const budget = Number(flags.get("budget") ?? 0);
+    const timeoutMs = flags.get("timeout") ? Number(flags.get("timeout")) : undefined;
+    const providerResult = providersFromFlags(flags);
+    if (providerResult.error) {
+      console.error(JSON.stringify({ ok: false, error: providerResult.error }));
+      process.exitCode = 1;
+      return;
+    }
+    const controller = new AbortController();
+    const onSigint = () => controller.abort();
+    process.once("SIGINT", onSigint);
+    const stack = buildExecutionStack({
+      policy,
+      budgetUsd: Number.isFinite(budget) ? budget : 0,
+      allowHosts: flags.getAll("allow-host"),
+      providers: providerResult.providers,
+    });
+    try {
+      const outcome = await stack.engine.invoke(
+        {
+          capability,
+          inputs: text ? [{ kind: "text" as const, text }] : [],
+          streaming: true,
+        },
+        {
+          signal: controller.signal,
+          timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
+          onStreamEvent: (event) => {
+            process.stderr.write(`data: ${JSON.stringify(event)}\n\n`);
+          },
+        },
+      );
+      console.log(
+        JSON.stringify(
+          {
+            ok: true,
+            model: outcome.decision.model,
+            basis: outcome.decision.basis,
+            costClass: outcome.decision.costClass,
+            adapter: outcome.adapterId,
+            committedUsd: outcome.committedUsd,
+            text: outcome.result.text,
+            structured: outcome.result.structured ?? null,
+            trace: outcome.decision.trace,
+          },
+          null,
+          2,
+        ),
+      );
+    } catch (e) {
+      const typed = toAllInOneError(e, {
+        code: "PROVIDER_CALL_FAILED",
+        category: "unavailable",
+        message: "stream failed",
+      });
+      console.error(
+        JSON.stringify({
+          ok: false,
+          error: `${typed.name}: ${typed.message}`,
+          code: typed.code,
+          category: typed.category,
+        }),
+      );
+      process.exitCode = 1;
+    } finally {
+      process.off("SIGINT", onSigint);
+    }
+    return;
+  }
+
   console.error(`Unknown command: ${cmd ?? "(none)"}`);
   console.error(
-    "Available: detect [path] | resolve <role> | policy | shot <url> | analyze <localhost-url> | select <capability> | invoke <capability> [--text ...] [--allow-host host] | specialist <role> [--text ...] | workflow <mode> --steps role,role [--auto] [--plan]",
+    "Available: detect [path] | resolve <role> | policy | shot <url> | analyze <localhost-url> | select <capability> | invoke <capability> [--text ...] [--allow-host host] | specialist <role> [--text ...] | workflow <mode> --steps role,role [--auto] [--plan] | stream <capability> [--text ...] [--allow-host host] [--provider-json/--provider-file ...] [--timeout ms]",
   );
   process.exitCode = 1;
 }
