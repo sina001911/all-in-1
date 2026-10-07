@@ -842,6 +842,36 @@
       h("p", { class: "faint", style: "margin:var(--s2) 0 0", text: "These bounds are frozen. This view reports them; it does not offer to change them." }),
     );
 
+    var providersHost = el("models-providers");
+    clear(providersHost);
+    var providers = await api.listModelProviders();
+    if (!providers || providers.length === 0) {
+      providersHost.appendChild(
+        EmptyState("No user provider registered. Settings → Model providers adds one; the frozen posture above is unchanged until then."),
+      );
+    } else {
+      providers.forEach(function (p) {
+        var credBadge =
+          p.credentialPresent === null
+            ? Badge("no key needed", "ok")
+            : p.credentialPresent
+              ? Badge("key present", "ok")
+              : Badge("key missing", "danger");
+        providersHost.appendChild(
+          h("div", { class: "card card-pad row" }, [
+            h("div", { class: "grow stack" }, [
+              h("span", { class: "mono", text: p.displayName + "  " + p.id }),
+              h("span", { class: "muted mono", text: p.endpoint + " · " + (p.models || []).join(", ") }),
+            ]),
+            Badge(String(p.locality), p.locality === "local" ? "ok" : "warn"),
+            Badge(String(p.costClass), "ok"),
+            credBadge,
+            p.registered ? Badge("registered", "ok") : Badge("not loaded", "danger"),
+          ]),
+        );
+      });
+    }
+
     var tableHost = el("models-table");
     clear(tableHost);
     if (!models || models.length === 0) {

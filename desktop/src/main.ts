@@ -153,6 +153,7 @@ function registerHandlers(facade: DesktopFacade): void {
   // of these channels mutates anything.
   ipcMain.handle("all-in-1:models:list", () => facade.listModels());
   ipcMain.handle("all-in-1:models:posture", () => facade.selectionPosture());
+  ipcMain.handle("all-in-1:models:providers", () => facade.listModelProviders());
   ipcMain.handle("all-in-1:workspace:roots", () => facade.listWorkspaceRoots());
   // D8: the warnings the D7 registration produced at startup, so the renderer
   // can explain a skipped provider instead of pretending it worked.

@@ -45,6 +45,7 @@ export const IPC_CHANNELS = [
   // D5 read-only model/provider and workspace views
   "all-in-1:models:list",
   "all-in-1:models:posture",
+  "all-in-1:models:providers",
   "all-in-1:workspace:roots",
   // D6: the native folder picker. The renderer may ASK main to let the user
   // choose a directory; it can never name one itself. Main owns the dialog and

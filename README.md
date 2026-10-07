@@ -143,6 +143,19 @@ The provider path from D7 is now manageable from the desktop UI:
   and the enumerated IPC channel `all-in-1:providers:warnings` to the
   Settings view.
 
+## D9 — Honest Models View
+
+The Models view now reports the provider path truthfully:
+
+- A "Your providers" card lists each user-registered provider with its
+  endpoint, models, locality, cost class, credential *presence* (never a
+  value), and whether the engine registered it. New channel
+  `all-in-1:models:providers` → `DesktopFacade.listModelProviders()`.
+- The selection posture stops lying: with no providers it still states
+  deny-all egress; once providers exist it names them and the actual
+  egress allowlist, and it keeps stating that the budget and FREE_ONLY
+  cost policy remain the binding bounds.
+
 ## Commands (verified on Node 24.21.0 / npm 11.19.0)
 
 ```sh

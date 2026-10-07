@@ -483,6 +483,47 @@ export class DesktopFacade {
     }));
   }
 
+  /**
+   * The user-registered providers, as plain JSON-safe data for the UI: who
+   * they are, where they live, what they cost, whether their key is in
+   * storage, and whether the engine actually registered them. No values.
+   */
+  listModelProviders(): ReadonlyArray<{
+    readonly id: string;
+    readonly displayName: string;
+    readonly endpoint: string;
+    readonly locality: "local" | "remote";
+    readonly costClass: "FREE" | "PAID";
+    readonly registered: boolean;
+    readonly apiKeyEnv: string | null;
+    /** true/false when a key is needed; null when the endpoint needs none. */
+    readonly credentialPresent: boolean | null;
+    readonly models: readonly string[];
+  }> {
+    const settings = this.stack.settingsStore.get();
+    return settings.providers.map((p) => {
+      let locality: "local" | "remote" = "remote";
+      try {
+        const host = new URL(p.endpoint).hostname.toLowerCase();
+        if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") locality = "local";
+      } catch {
+        /* unparseable endpoints never survived registration */
+      }
+      const paid = (p.models ?? []).some((m) => m.costPer1MUsd !== undefined);
+      return {
+        id: p.id,
+        displayName: p.displayName ?? p.id,
+        endpoint: p.endpoint,
+        locality,
+        costClass: paid ? "PAID" : "FREE",
+        registered: this.stack.core.stack.adapters.has(p.id),
+        apiKeyEnv: p.apiKeyEnv ?? null,
+        credentialPresent: p.apiKeyEnv ? this.stack.credentials.has(p.apiKeyEnv) : null,
+        models: (p.models ?? []).map((m) => m.id),
+      };
+    });
+  }
+
   /** Why selection is bounded the way it is: the frozen posture, read-only. */
   selectionPosture(): {
     readonly egress: string;
@@ -490,12 +531,24 @@ export class DesktopFacade {
     readonly policy: string;
     readonly note: string;
   } {
+    const providers = this.stack.settingsStore.get().providers;
+    const allowlist = this.stack.core.stack.egress.allowlist;
+    if (providers.length === 0) {
+      return {
+        egress: this.stack.core.stack.egress.kind,
+        budgetUsd: this.stack.budget.snapshot().budgetUsd,
+        policy: "FREE_ONLY",
+        note:
+          "Only local, zero-cost models are reachable: egress is deny-all, the budget is 0, and the cost policy is FREE_ONLY. No credential is read and no host is contacted.",
+      };
+    }
+    const hosts = allowlist.length > 0 ? allowlist.join(", ") : "loopback only";
     return {
       egress: this.stack.core.stack.egress.kind,
       budgetUsd: this.stack.budget.snapshot().budgetUsd,
       policy: "FREE_ONLY",
       note:
-        "Only local, zero-cost models are reachable: egress is deny-all, the budget is 0, and the cost policy is FREE_ONLY. No credential is read and no host is contacted.",
+        `${providers.length} user-registered provider(s): ${providers.map((p) => p.id).join(", ")}. Egress is open to ${hosts}; the budget stays ${this.stack.budget.snapshot().budgetUsd} USD and the cost policy stays FREE_ONLY, so a paid model remains unselectable until the human lifts both.`,
     };
   }
 }

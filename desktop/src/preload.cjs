@@ -43,6 +43,7 @@ const api = {
   // D5 read-only views
   listModels: () => ipcRenderer.invoke("all-in-1:models:list"),
   getSelectionPosture: () => ipcRenderer.invoke("all-in-1:models:posture"),
+  listModelProviders: () => ipcRenderer.invoke("all-in-1:models:providers"),
   listWorkspaceRoots: () => ipcRenderer.invoke("all-in-1:workspace:roots"),
   // D8: why a registered provider was skipped at startup.
   getProviderWarnings: () => ipcRenderer.invoke("all-in-1:providers:warnings"),
