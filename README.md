@@ -292,6 +292,20 @@ overlay. When `diag-stream` is checked it polls the existing
 stops polling at terminal state. The final `DiagnosticResult.text` still
 replaces this preview entirely — the stream never persists.
 
+## D19 — Unified Progress State Rendering
+
+Agent and workflow streams now use the same transient-marker format in the
+renderer:
+
+- `[workflow tool fragment]` for the tool frame;
+- `[usage: prompt+completion]` for usage frames;
+- `[finish: ...]` for finish frames;
+- if a run fails, `[failed: <code> — <message>]` appears.
+
+The final `AgentResult` / `DiagnosticResult` always replaces the live preview.
+This change is renderer-only; bridge contract, IPC, storage and provider
+payloads are untouched.
+
 ```sh
 npm install        # isolated to this directory; runtime deps remain ZERO
 npm run typecheck  # tsc --noEmit (strict)

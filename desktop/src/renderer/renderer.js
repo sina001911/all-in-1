@@ -476,9 +476,17 @@
         state.liveStream += ev.text;
         text(body, state.liveStream);
       } else if (ev.kind === "tool-call-delta") {
-        text(body, (state.liveStream || "") + "\n→ tool fragment…");
+        if (!state.liveStream) state.liveStream = "";
+        state.liveStream += "\n[workflow tool fragment] ";
+        text(body, state.liveStream);
+      } else if (ev.kind === "usage") {
+        if (!state.liveStream) state.liveStream = "";
+        state.liveStream += `\n[usage: ${ev.promptTokens ?? 0}+${ev.completionTokens ?? 0}]`;
+        text(body, state.liveStream);
       } else if (ev.kind === "finish") {
-        /* final shape is asserted when AgentResult arrives */
+        if (!state.liveStream) state.liveStream = "";
+        state.liveStream += `\n[finish${ev.finishReason ? ": " + ev.finishReason : ""}]`;
+        text(body, state.liveStream);
       }
       transcript.scrollTop = transcript.scrollHeight;
     }
