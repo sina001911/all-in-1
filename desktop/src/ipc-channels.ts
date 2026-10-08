@@ -18,6 +18,9 @@ export const IPC_CHANNELS = [
   "all-in-1:budget",
   "all-in-1:runs:list",
   "all-in-1:run:get",
+  // D24: per-run cost/token accounting. With no argument it reports every run;
+  // a run id reports that run alone. Read-only, like the rest of this list.
+  "all-in-1:run:usage",
   "all-in-1:run:diagnostic",
   "all-in-1:run:cancel",
   "all-in-1:approvals:list",

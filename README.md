@@ -347,6 +347,34 @@ Agent view shows a compact first-run card when no providers are registered.
 - `Add provider` navigates to Settings and opens the existing add-provider modal.
 - `Dismiss` hides the card in memory only; no new persistence or routes.
 
+## D24 — Per-run Cost and Token Accounting
+
+The Runs view now reports what each run actually cost and consumed. The engine
+was already writing `UsageRecord`s with a `runId`, token counts, and a derived
+cost — the UI simply never showed them.
+
+- `DesktopFacade.getRunUsage(runId)` / `listRunUsage()` derive a per-run ledger
+  from the usage store alone: invocation count, cost, prompt/completion tokens,
+  failed invocations, and a per-model breakdown (most expensive first).
+- One new read-only channel, `all-in-1:run:usage`, with the same string-arg
+  guard as `run:get`: no argument lists every run, an id reports that run.
+- The Runs table gained `Cost` and `Tokens` columns; the run detail gained an
+  Accounting section with the per-model table.
+
+Nothing is invented and nothing is rounded up:
+
+- Cost comes only from the provider's own reported usage frame at the
+  registered rate; unreported usage is exactly `$0` (the deterministic local
+  models are genuinely zero-cost, and that is what the column shows).
+- A run recorded but never billed shows an honest zero ledger; a run nobody
+  recorded and nothing billed is `undefined`, not a plausible zero.
+- Usage the engine could not attribute to a run (`runId: null`) is never
+  silently assigned to one.
+- Deleting a run record cannot hide what it cost — the derivation is from the
+  usage store, so the spend remains visible.
+- The derivation is strictly read-only: it records nothing and writes no file.
+
+
 ```sh
 npm install        # isolated to this directory; runtime deps remain ZERO
 npm run typecheck  # tsc --noEmit (strict)

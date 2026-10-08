@@ -16,6 +16,8 @@ const api = {
   getBudget: () => ipcRenderer.invoke("all-in-1:budget"),
   listRuns: () => ipcRenderer.invoke("all-in-1:runs:list"),
   getRun: (id) => ipcRenderer.invoke("all-in-1:run:get", id),
+  // D24: no argument lists every run's accounting; an id reports that run.
+  getRunUsage: (runId) => ipcRenderer.invoke("all-in-1:run:usage", runId),
   runDiagnostic: (request) => ipcRenderer.invoke("all-in-1:run:diagnostic", request),
   cancelRun: (runId) => ipcRenderer.invoke("all-in-1:run:cancel", runId),
   listApprovals: () => ipcRenderer.invoke("all-in-1:approvals:list"),

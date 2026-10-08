@@ -65,6 +65,81 @@ export interface DiagnosticResult {
   readonly errorCode?: string;
 }
 
+/**
+ * D24: one model's contribution to a run's accounting. Derived from the usage
+ * store alone — the provider's own reported token counts and the registered
+ * rate, never an estimate.
+ */
+export interface RunUsageModelRow {
+  readonly modelId: string;
+  readonly invocations: number;
+  readonly costUsd: number;
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+}
+
+/**
+ * D24: what a single run cost and consumed. Every number traces to a usage
+ * record the engine already wrote; nothing is invented, and records the engine
+ * could not attribute to any run are never silently assigned to one.
+ */
+export interface RunUsageSummary {
+  readonly runId: string;
+  readonly invocations: number;
+  readonly costUsd: number;
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  /** Invocations whose outcome was not `ok` (failed / cancelled / timeout). */
+  readonly failed: number;
+  /** Per-model breakdown, most expensive first. */
+  readonly models: readonly RunUsageModelRow[];
+}
+
+function finiteOrZero(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function summarizeRunUsage(runId: string, records: readonly UsageRecord[]): RunUsageSummary {
+  let invocations = 0;
+  let costUsd = 0;
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let failed = 0;
+  const byModel = new Map<string, RunUsageModelRow>();
+  for (const rec of records) {
+    invocations += 1;
+    const cost = finiteOrZero(rec.costUsd);
+    costUsd += cost;
+    const prompt = finiteOrZero(rec.promptTokens);
+    const completion = finiteOrZero(rec.completionTokens);
+    promptTokens += prompt;
+    completionTokens += completion;
+    if (rec.outcome !== "ok") failed += 1;
+    const existing = byModel.get(rec.modelId);
+    if (existing) {
+      byModel.set(rec.modelId, {
+        modelId: existing.modelId,
+        invocations: existing.invocations + 1,
+        costUsd: existing.costUsd + cost,
+        promptTokens: existing.promptTokens + prompt,
+        completionTokens: existing.completionTokens + completion,
+      });
+    } else {
+      byModel.set(rec.modelId, {
+        modelId: rec.modelId,
+        invocations: 1,
+        costUsd: cost,
+        promptTokens: prompt,
+        completionTokens: completion,
+      });
+    }
+  }
+  const models = [...byModel.values()].sort(
+    (a, b) => b.costUsd - a.costUsd || a.modelId.localeCompare(b.modelId),
+  );
+  return { runId, invocations, costUsd, promptTokens, completionTokens, failed, models };
+}
+
 const DEFAULT_STEPS: Readonly<Record<SafetyMode, readonly ModelRole[]>> = {
   INSPECT: ["CODE_REVIEWER"],
   SUGGEST: ["DEEP_REASONING"],
@@ -325,6 +400,45 @@ export class DesktopFacade {
 
   getUsageTotals(): { readonly invocations: number; readonly totalCostUsd: number; readonly totalTokens: number } {
     return this.stack.usageStore.totals();
+  }
+
+  /**
+   * D24: the accounting for one run. Read-only derivation from the usage store:
+   * an unknown run that also has no accounted invocation is reported as
+   * `undefined` rather than a plausible-looking zero ledger.
+   */
+  getRunUsage(runId: string): RunUsageSummary | undefined {
+    if (typeof runId !== "string" || runId.length === 0) return undefined;
+    const records = this.stack.usageStore.list().filter((r) => r.runId === runId);
+    if (records.length === 0 && !this.stack.runStore.get(runId)) return undefined;
+    return summarizeRunUsage(runId, records);
+  }
+
+  /**
+   * D24: the accounting for every run, in run order. Runs the engine recorded
+   * but never billed appear with an honest zero ledger; spend whose run record
+   * is gone still appears, so deleting a run can never hide what it cost.
+   */
+  listRunUsage(): readonly RunUsageSummary[] {
+    const byRun = new Map<string, UsageRecord[]>();
+    for (const rec of this.stack.usageStore.list()) {
+      // Records the engine could not attribute to a run are never assigned to
+      // one here.
+      if (typeof rec.runId !== "string") continue;
+      const list = byRun.get(rec.runId);
+      if (list) list.push(rec);
+      else byRun.set(rec.runId, [rec]);
+    }
+    const summaries: RunUsageSummary[] = [];
+    const known = new Set<string>();
+    for (const run of this.stack.runStore.list()) {
+      known.add(run.id);
+      summaries.push(summarizeRunUsage(run.id, byRun.get(run.id) ?? []));
+    }
+    for (const [runId, records] of byRun) {
+      if (!known.has(runId)) summaries.push(summarizeRunUsage(runId, records));
+    }
+    return summaries;
   }
 
   /** Redacted, persisted audit trail. */

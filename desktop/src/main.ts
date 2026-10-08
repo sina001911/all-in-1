@@ -55,6 +55,9 @@ function registerHandlers(facade: DesktopFacade): void {
   ipcMain.handle("all-in-1:run:get", (_e, id: unknown) =>
     typeof id === "string" ? facade.getRun(id) : undefined,
   );
+  ipcMain.handle("all-in-1:run:usage", (_e, runId: unknown) =>
+    typeof runId === "string" ? facade.getRunUsage(runId) : facade.listRunUsage(),
+  );
   ipcMain.handle("all-in-1:run:diagnostic", (_e, raw: unknown) => {
     if (!raw || typeof raw !== "object") throw new Error("Invalid diagnostic request");
     const req = raw as Record<string, unknown>;

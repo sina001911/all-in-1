@@ -678,6 +678,34 @@
     return Math.max(0, run.finishedAt - run.startedAt) + " ms";
   }
 
+  /** Formats a cost exactly as reported: $0 stays $0, a NaN shows as unknown. */
+  function formatUsd(n) {
+    var v = Number(n);
+    if (v !== v) return "—";
+    if (v === 0) return "$0";
+    return "$" + v.toFixed(6);
+  }
+
+  function tokensOf(summary) {
+    if (!summary) return "—";
+    return String((summary.promptTokens || 0) + (summary.completionTokens || 0));
+  }
+
+  async function loadUsageByRun() {
+    // One pull for the whole table. A failure degrades the cost column to "—"
+    // instead of taking the run list down with it.
+    try {
+      var all = await api.getRunUsage();
+      var map = {};
+      (all || []).forEach(function (u) {
+        map[u.runId] = u;
+      });
+      return map;
+    } catch (e) {
+      return null;
+    }
+  }
+
   async function loadRuns() {
     var host = el("runs-table");
     clear(host);
@@ -689,8 +717,10 @@
       host.appendChild(EmptyState("No runs recorded yet."));
       return;
     }
+    var usageByRun = await loadUsageByRun();
     var rows = state.runs.map(function (run) {
       var tone = run.status === "completed" ? "ok" : run.status === "cancelled" ? "warn" : "danger";
+      var summary = usageByRun ? usageByRun[run.id] : null;
       var tr = h("tr", {
         class: "selectable",
         tabindex: "0",
@@ -711,12 +741,14 @@
         h("td", { text: String(run.subject || "(no subject)") }),
         h("td", null, [Badge(run.status, tone)]),
         h("td", { text: durationOf(run) }),
+        h("td", { class: "mono", text: summary ? formatUsd(summary.costUsd) : "—" }),
+        h("td", { class: "mono faint", text: tokensOf(summary) }),
         h("td", { class: "mono faint", text: String(run.errorCode || "—") }),
       ]);
       return tr;
     });
     host.appendChild(
-      Table(["Run", "Mode", "Subject", "Status", "Duration", "Error"], rows),
+      Table(["Run", "Mode", "Subject", "Status", "Duration", "Cost", "Tokens", "Error"], rows),
     );
   }
 
@@ -750,6 +782,50 @@
     if (run.deliverable) {
       card.appendChild(h("h3", { text: "Deliverable", style: "margin-top:var(--s4)" }));
       card.appendChild(mono(run.deliverable));
+    }
+    var usage = null;
+    try {
+      usage = await api.getRunUsage(id);
+    } catch (e) {
+      usage = null;
+    }
+    if (usage) {
+      card.appendChild(h("h3", { text: "Accounting", style: "margin-top:var(--s4)" }));
+      var acctFacts = [
+        ["invocations", String(usage.invocations)],
+        ["cost", formatUsd(usage.costUsd)],
+        ["prompt tokens", String(usage.promptTokens)],
+        ["completion tokens", String(usage.completionTokens)],
+        ["failed", String(usage.failed)],
+      ];
+      var acctDl = h("dl", { class: "kv" }, []);
+      acctFacts.forEach(function (f) {
+        acctDl.appendChild(h("dt", { text: f[0] }));
+        acctDl.appendChild(h("dd", { class: "mono", text: String(f[1]) }));
+      });
+      card.appendChild(acctDl);
+      if (usage.models && usage.models.length > 0) {
+        card.appendChild(
+          Table(
+            ["Model", "Calls", "Cost", "Tokens"],
+            usage.models.map(function (m) {
+              return h("tr", null, [
+                h("td", { class: "mono", text: String(m.modelId) }),
+                h("td", { class: "mono", text: String(m.invocations) }),
+                h("td", { class: "mono", text: formatUsd(m.costUsd) }),
+                h("td", { class: "mono", text: tokensOf(m) }),
+              ]);
+            }),
+          ),
+        );
+      }
+      card.appendChild(
+        h("p", {
+          class: "faint",
+          style: "margin:var(--s2) 0 0",
+          text: "Cost comes only from the provider's own reported usage; unreported usage is exactly $0.",
+        }),
+      );
     }
     host.appendChild(card);
   }
