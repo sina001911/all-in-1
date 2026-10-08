@@ -24,14 +24,41 @@ export interface AgentStreamEnvelope {
   readonly error?: { readonly code: string; readonly message: string };
 }
 
+type BridgeRun = {
+  events: StreamEvent[];
+  state: AgentStreamEnvelope["state"];
+  error?: AgentStreamEnvelope["error"];
+  /** Timestamp of the last terminal transition, used for bounded retention. */
+  terminalAt?: number;
+};
+
 export class AgentStreamBridge {
-  private readonly runs = new Map<string, { events: StreamEvent[]; state: AgentStreamEnvelope["state"]; error?: AgentStreamEnvelope["error"] }>();
+  private readonly runs = new Map<string, BridgeRun>();
+  private readonly terminalRetentionMs: number;
+  private readonly now: () => number;
+
+  constructor(options?: { terminalRetentionMs?: number; now?: () => number }) {
+    this.terminalRetentionMs = options?.terminalRetentionMs ?? 30_000;
+    this.now = options?.now ?? (() => Date.now());
+  }
+
+  /** Remove runs whose terminal state has outlived the retention window. */
+  private prune(): void {
+    const cutoff = this.now() - this.terminalRetentionMs;
+    for (const [id, run] of this.runs) {
+      if (run.state !== "running" && run.terminalAt !== undefined && run.terminalAt <= cutoff) {
+        this.runs.delete(id);
+      }
+    }
+  }
 
   start(runId: string): void {
+    this.prune();
     this.runs.set(runId, { events: [], state: "running" });
   }
 
   append(runId: string, event: StreamEvent): void {
+    this.prune();
     const run = this.runs.get(runId);
     if (!run || run.state !== "running") return;
     // Bound the buffer: never more than 2000 frames per run. Oldest text
@@ -41,15 +68,21 @@ export class AgentStreamBridge {
   }
 
   done(runId: string): void {
+    this.prune();
     const run = this.runs.get(runId);
-    if (run && run.state === "running") run.state = "done";
+    if (run && run.state === "running") {
+      run.state = "done";
+      run.terminalAt = this.now();
+    }
   }
 
   failed(runId: string, error: AgentStreamEnvelope["error"]): void {
+    this.prune();
     const run = this.runs.get(runId);
     if (run && run.state === "running") {
       run.state = "failed";
       run.error = error;
+      run.terminalAt = this.now();
     }
   }
 
@@ -60,6 +93,7 @@ export class AgentStreamBridge {
    * references when the caller claims them.
    */
   getSince(runId: string, cursor: number): { readonly events: readonly StreamEvent[]; readonly state: AgentStreamEnvelope["state"]; readonly error?: AgentStreamEnvelope["error"]; readonly nextIndex: number } | undefined {
+    this.prune();
     const run = this.runs.get(runId);
     if (!run) return undefined;
     const from = Math.max(0, Math.min(cursor, run.events.length));

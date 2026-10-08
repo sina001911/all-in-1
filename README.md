@@ -273,6 +273,17 @@ the final `DiagnosticResult` authoritative:
 - Agent bridge (`getAgentStream`) is untouched; workflow has its own
   independent runId namespace via `workflowStreamBridge`.
 
+## D17 — Streaming Hardening
+
+Terminal bridge state is now short-lived, never retained forever:
+
+- `AgentStreamBridge` lazily prunes entries that have been `done`/`failed` for
+  longer than its terminal retention window (default 30 s).
+- Running entries are never pruned; only completed/failed flows are cleaned up.
+- Public pull contract (`getSince`/`getAgentStream`/`getWorkflowStream`)
+  is unchanged: once an entry is pruned it returns `undefined`, which both the
+  agent and workflow UIs already treat as the end of the poll.
+
 ## Commands (verified on Node 24.21.0 / npm 11.19.0)
 
 ```sh
