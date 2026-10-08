@@ -406,6 +406,15 @@
             </div>
             <div class="transcript" id="transcript" role="log" aria-live="polite" aria-label="Conversation transcript"></div>
             <p class="faint" style="margin-top:var(--s2)">First run? Built-in local models work offline. For a real provider, go to Settings → Model providers, add the endpoint, then use Test config.</p>
+            <div id="agent-first-run" class="card card-pad" style="display:none; margin-top:var(--s3)">
+              <h3>First run</h3>
+              <p class="muted" style="margin:var(--s2) 0">Start locally with deterministic models, or add a provider and test it before saving.</p>
+              <div class="row" style="margin-top:var(--s3)">
+                <button type="button" class="btn btn-primary" id="first-run-local">Start offline</button>
+                <button type="button" class="btn" id="first-run-provider">Add provider</button>
+                <button type="button" class="btn" id="first-run-dismiss">Dismiss</button>
+              </div>
+            </div>
           </div>
         </section>
 

@@ -274,6 +274,7 @@
     selectedRunId: null,
     runs: [],
     pending: [],
+    firstRunDismissed: false,
   };
 
   var MODES = ["INSPECT", "SUGGEST", "BUILD"];
@@ -1428,6 +1429,32 @@
 
     el("agent-run").addEventListener("click", runAgent);
     el("agent-cancel").addEventListener("click", cancelAgent);
+    el("first-run-local")?.addEventListener("click", function () {
+      state.firstRunDismissed = true;
+      var card = el("agent-first-run");
+      if (card && card.style) card.style.display = "none";
+      el("agent-prompt").focus();
+    });
+    el("first-run-dismiss")?.addEventListener("click", function () {
+      state.firstRunDismissed = true;
+      var card = el("agent-first-run");
+      if (card && card.style) card.style.display = "none";
+    });
+    el("first-run-provider")?.addEventListener("click", function () {
+      state.firstRunDismissed = true;
+      var card = el("agent-first-run");
+      if (card && card.style) card.style.display = "none";
+      showView("settings");
+      Promise.resolve().then(async function () {
+        try {
+          await loadSettings();
+          var addHost = document.querySelector('#settings-providers');
+          if (addHost && addHost.lastElementChild && typeof addHost.lastElementChild.click === "function") {
+            addHost.lastElementChild.click();
+          }
+        } catch (_e) {}
+      });
+    });
     el("agent-prompt").addEventListener("keydown", function (ev) {
       if (ev.key === "Enter" && !ev.shiftKey) {
         ev.preventDefault();
@@ -1514,6 +1541,19 @@
     await loadApprovals();
     await loadTools();
     startPolling();
+    updateFirstRunCard();
+  }
+
+  async function updateFirstRunCard() {
+    var card = el("agent-first-run");
+    if (!card || state.firstRunDismissed) return;
+    if (!card.style) return;
+    try {
+      var settings = await api.getSettings();
+      card.style.display = ((settings && settings.providers) || []).length === 0 ? "" : "none";
+    } catch (_e) {
+      card.style.display = "none";
+    }
   }
 
   init().catch(function (e) {

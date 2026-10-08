@@ -339,6 +339,14 @@ The desktop is now buildable as a local dev artifact:
 - Renderer remains static. Engine, provider, egress, and persistence paths are unchanged.
 - First-run hint is a small inline reminder, not a wizard.
 
+## D23 - First-run Onboarding Surface
+
+Agent view shows a compact first-run card when no providers are registered.
+
+- `Start offline` dismisses the card for the session.
+- `Add provider` navigates to Settings and opens the existing add-provider modal.
+- `Dismiss` hides the card in memory only; no new persistence or routes.
+
 ```sh
 npm install        # isolated to this directory; runtime deps remain ZERO
 npm run typecheck  # tsc --noEmit (strict)
