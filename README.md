@@ -306,6 +306,13 @@ The final `AgentResult` / `DiagnosticResult` always replaces the live preview.
 This change is renderer-only; bridge contract, IPC, storage and provider
 payloads are untouched.
 
+## D20 — Facade Streaming Lifecycle
+
+The desktop facade now has a dedicated lifecycle harness over both streaming
+bridges. `streamBridge` and `workflowStreamBridge` stay separately keyed, their
+terminal state is reported through the facade query shape, and cancellation/
+timeouts land in the same typed envelope as the existing core path.
+
 ```sh
 npm install        # isolated to this directory; runtime deps remain ZERO
 npm run typecheck  # tsc --noEmit (strict)
