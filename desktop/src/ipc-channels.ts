@@ -57,6 +57,8 @@ export const IPC_CHANNELS = [
   // D7: the user may register providers; the renderer sees the warnings
   // registration produced (surfaced, never silently swallowed).
   "all-in-1:providers:warnings",
+  // D21: explicit provider-config validation before save.
+  "all-in-1:providers:test",
   "all-in-1:workspace:pick",
 ] as const;
 

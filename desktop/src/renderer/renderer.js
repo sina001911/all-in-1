@@ -1195,6 +1195,7 @@
     var endpointInput = h("input", { id: "pv-endpoint", type: "text", class: "input", placeholder: "http://127.0.0.1:11434/v1" });
     var keyInput = h("input", { id: "pv-keyenv", type: "text", class: "input", placeholder: "env var name, or empty for a local server" });
     var modelsInput = h("input", { id: "pv-models", type: "text", class: "input", placeholder: "llama3, qwen2.5 (comma-separated)" });
+    const testOut = h("div", { class: "muted mono", text: "" });
     var answer = await openModal(
       "Add a model provider",
       h("div", { class: "stack" }, [
@@ -1203,6 +1204,30 @@
         h("label", { class: "field" }, [h("span", { text: "Endpoint" }), endpointInput]),
         h("label", { class: "field" }, [h("span", { text: "Key env var" }), keyInput]),
         h("label", { class: "field" }, [h("span", { text: "Models" }), modelsInput]),
+        Button("Test config", {
+          small: true,
+          onClick: async function () {
+            testOut.textContent = "testing…";
+            try {
+              var raw = {
+                id: String(idInput.value || "").trim(),
+                displayName: String(idInput.value || "").trim(),
+                endpoint: String(endpointInput.value || "").trim(),
+                apiKeyEnv: String(keyInput.value || "").trim() || null,
+                models: String(modelsInput.value || "")
+                  .split(",")
+                  .map(function (s) { return s.trim(); })
+                  .filter(function (s) { return s.length > 0; })
+                  .map(function (m) { return { id: m, displayName: m }; }),
+              };
+              var probe = await api.validateProviderConfig(raw);
+              testOut.textContent = probe.ok ? `OK: ${probe.detail}` : `FAILED${probe.code ? " (" + probe.code + ")" : ""}: ${probe.detail}`;
+            } catch (e) {
+              testOut.textContent = String(e);
+            }
+          },
+        }),
+        testOut,
       ]),
       { confirmLabel: "Add" },
     );

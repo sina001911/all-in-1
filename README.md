@@ -313,6 +313,20 @@ bridges. `streamBridge` and `workflowStreamBridge` stay separately keyed, their
 terminal state is reported through the facade query shape, and cancellation/
 timeouts land in the same typed envelope as the existing core path.
 
+## D21 — Provider Validate / Test Before Save
+
+Settings > Model providers can now probe a provider config before saving.
+The add-provider modal adds a `Test config` button:
+
+- Sends the raw provider object through `facade.testProviderConfig`.
+- Validates the same sanitizeProvider rules used for Save.
+- If an api key env name is declared, ensures the variable is set before probing.
+- Probes only `GET {{endpoint}}/models` — no Chat Completions request, no
+  business prompt, no accidental spend.
+- Result is shown inline; if the endpoint is unreachable or the models list is
+  incomplete the typed detail is `ok:false` + `code`, but the UI never blocks
+  Save.
+
 ```sh
 npm install        # isolated to this directory; runtime deps remain ZERO
 npm run typecheck  # tsc --noEmit (strict)

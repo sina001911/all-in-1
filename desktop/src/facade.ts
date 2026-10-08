@@ -27,12 +27,15 @@ import type {
   LogRecord,
   RunRecord,
   UsageRecord,
+  SettingsProvider,
 } from "./persistence/types.ts";
 import type { ToolRequest, ToolResult } from "../../src/tools/types.ts";
 import type { ToolAuditRecord } from "../../src/tools/audit.ts";
 import type { ApprovalRecord as ToolApprovalEntry } from "./tools/approver.ts";
 import type { AgentRequest, AgentResult } from "../../src/agent/index.ts";
 import { toolsVisibleInMode } from "../../src/agent/index.ts";
+import { sanitizeProvider } from "./persistence/settings-store.ts";
+import { resolveBearerToken } from "../../src/execution/secrets.ts";
 
 export interface DiagnosticRequest {
   readonly mode: SafetyMode;
@@ -338,6 +341,131 @@ export class DesktopFacade {
   /** Warnings from D7 user-provider registration at startup. */
   getProviderWarnings(): readonly string[] {
     return this.stack.providerWarnings;
+  }
+
+  /**
+   * D21: validate a raw provider declaration before it reaches persistence.
+   * Shape checks happen with the same strict sanitizer, and endpoint/model
+   * availability is probed without generating any chat completion: the probe
+   * is a cheap GET <endpoint>/models that never ships a business request.
+   */
+  async testProviderConfig(raw: unknown): Promise<{
+    ok: boolean;
+    detail: string;
+    code?: string;
+    endpoint: string;
+    models: Array<{ id: string; streaming?: boolean; declared: boolean; discovered: boolean }>;
+  }> {
+    const provider = sanitizeProvider(raw);
+    if (!provider) {
+      return {
+        ok: false,
+        code: "PROVIDER_INVALID",
+        detail: "Provider config was rejected by sanitizeProvider(raw): endpoint/id/models/key env rules not satisfied",
+        endpoint: String((raw as { endpoint?: unknown } | null)?.endpoint ?? ""),
+        models: [],
+      };
+    }
+
+    let canResolve = true;
+    let detail = "";
+    let code: string | undefined;
+    if (provider.apiKeyEnv) {
+      try {
+        void resolveBearerToken(provider.apiKeyEnv);
+      } catch {
+        canResolve = false;
+        code = "CREDENTIAL_UNAVAILABLE";
+        detail = `Env var ${provider.apiKeyEnv} is not set; endpoint model check skipped for cost safety`;
+      }
+    }
+
+    const base = provider.endpoint.replace(/\/+$/, "");
+    const probed: Array<{ id: string; streaming?: boolean; declared: boolean; discovered: boolean }> = [];
+    for (const m of provider.models) {
+      probed.push({ id: m.id, streaming: m.streaming, declared: true, discovered: false });
+    }
+    if (!canResolve) {
+      return { ok: false, code, detail, endpoint: provider.endpoint, models: probed };
+    }
+
+    let rawBody = "";
+    let status = 0;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (provider.apiKeyEnv) {
+        const token = resolveBearerToken(provider.apiKeyEnv);
+        headers.Authorization = `Bearer ${token}`;
+      }
+      const response = await fetch(`${base}/models`, {
+        method: "GET",
+        headers,
+        signal: controller.signal,
+      });
+      status = response.status;
+      rawBody = await response.text();
+      if (status < 200 || status >= 300) {
+        return {
+          ok: false,
+          code: "PROVIDER_UNREACHABLE",
+          detail: `Endpoint rejected model listing with HTTP ${status}`,
+          endpoint: provider.endpoint,
+          models: probed,
+        };
+      }
+    } catch (e) {
+      return {
+        ok: false,
+        code: "PROVIDER_UNREACHABLE",
+        detail: `Endpoint unreachable during model probe: ${e instanceof Error ? e.message : String(e)}`,
+        endpoint: provider.endpoint,
+        models: probed,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+
+    let dataArray: unknown[] = [];
+    try {
+      const parsed = JSON.parse(rawBody) as { data?: unknown };
+      if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.data)) {
+        return {
+          ok: false,
+          code: "PROVIDER_CALL_FAILED",
+          detail: "Endpoint returned JSON, but it is not a valid models list",
+          endpoint: provider.endpoint,
+          models: probed,
+        };
+      }
+      dataArray = parsed.data;
+    } catch {
+      return {
+        ok: false,
+        code: "PROVIDER_CALL_FAILED",
+        detail: "Endpoint returned non-JSON during model probe",
+        endpoint: provider.endpoint,
+        models: probed,
+      };
+    }
+
+    const listed = new Set(
+      dataArray
+        .map((item: any) => (item && typeof item.id === "string" ? item.id : ""))
+        .filter((id: string) => id.length > 0),
+    );
+    const finalModels = probed.map((m) => ({ ...m, discovered: listed.has(m.id) }));
+    const allDiscovered = finalModels.every((m) => m.discovered);
+    return {
+      ok: allDiscovered,
+      code: allDiscovered ? undefined : "MODEL_NOT_FOUND",
+      detail: allDiscovered
+        ? `Provider endpoint is reachable and all ${finalModels.length} declared model(s) were found.`
+        : `Provider endpoint is reachable, but ${finalModels.filter((m) => !m.discovered).length} declared model(s) were not in the models list.`,
+      endpoint: provider.endpoint,
+      models: finalModels,
+    };
   }
 
   patchSettings(patch: Partial<DesktopSettings>): DesktopSettings {
