@@ -754,8 +754,9 @@
   function pushDiagStreamEvent(ev) {
     var host = el("diag-output");
     if (ev.kind === "text") host.textContent = (host.textContent || "") + ev.text;
-    else if (ev.kind === "tool-call-delta") host.textContent = (host.textContent || "") + "\n[tool fragment] ";
-    else if (ev.kind === "finish") host.textContent = (host.textContent || "") + "\n[finish]";
+    else if (ev.kind === "tool-call-delta") host.textContent = (host.textContent || "") + "\n[workflow tool fragment] ";
+    else if (ev.kind === "usage") host.textContent = (host.textContent || "") + `\n[usage: ${ev.promptTokens ?? 0}+${ev.completionTokens ?? 0}]`;
+    else if (ev.kind === "finish") host.textContent = (host.textContent || "") + `\n[finish${ev.finishReason ? ": " + ev.finishReason : ""}]`;
   }
 
   async function pollDiagStream(runId) {
@@ -764,6 +765,12 @@
       if (!env) return;
       for (var i = 0; i < env.events.length; i++) pushDiagStreamEvent(env.events[i]);
       diagStreamCursor = env.nextIndex;
+      if (env.state === "failed" && env.error) {
+        var host = el("diag-output");
+        if (!host.textContent.includes("[failed:")) {
+          host.textContent = (host.textContent || "") + `\n[failed: ${env.error.code} — ${env.error.message}]`;
+        }
+      }
       if (env.state !== "running" && diagStreamTimer !== null) {
         clearInterval(diagStreamTimer);
         diagStreamTimer = null;

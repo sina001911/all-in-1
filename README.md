@@ -284,7 +284,13 @@ Terminal bridge state is now short-lived, never retained forever:
   is unchanged: once an entry is pruned it returns `undefined`, which both the
   agent and workflow UIs already treat as the end of the poll.
 
-## Commands (verified on Node 24.21.0 / npm 11.19.0)
+## D18 — Workflow Progress Renderer
+
+The desktop renderer can now render workflow progress only as a transient
+overlay. When `diag-stream` is checked it polls the existing
+`getWorkflowStream` endpoint, renders text/usage/finish/failure markers, and
+stops polling at terminal state. The final `DiagnosticResult.text` still
+replaces this preview entirely — the stream never persists.
 
 ```sh
 npm install        # isolated to this directory; runtime deps remain ZERO
