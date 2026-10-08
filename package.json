@@ -6,11 +6,18 @@
   "description": "Global visual + multi-model + media AI layer for OpenCode (P1 registries/roles/cost policy/project detection, P2 browser/screenshot/artifacts, P3 vision/model catalogue/capabilities/provider adapter validation, P4 execution layer/capability selection/egress security/live invocation, P5 specialist layer/HITL workflow orchestration/structured-output validation/observability, P6 OpenCode plugin binding/command surface/edit boundary)",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "desktop:build": "node --input-type=module -e \"import fs from 'node:fs'; fs.rmSync('dist/desktop', { recursive: true, force: true });\" && esbuild desktop/src/main.ts --bundle --platform=node --format=esm --external:electron --outfile=dist/desktop/main.mjs && esbuild desktop/src/preload.cjs --bundle --platform=node --format=cjs --external:electron --outfile=dist/desktop/preload.cjs",
+    "desktop:assets": "node --input-type=module -e \"import fs from 'node:fs'; fs.cpSync('desktop/src/renderer','dist/desktop/renderer',{ recursive: true });\"",
+    "desktop:dist": "npm run desktop:build && npm run desktop:assets",
+    "desktop:dev": "npm run desktop:dist && electron dist/desktop/main.mjs",
+    "desktop:selftest": "npm run desktop:dist && electron dist/desktop/main.mjs --selftest"
   },
   "devDependencies": {
     "@opencode/plugin": "^2.0.22",
     "@types/node": "^24.0.0",
+    "electron": "^44.7.0",
+    "esbuild": "^0.28.2",
     "playwright": "^1.63.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"

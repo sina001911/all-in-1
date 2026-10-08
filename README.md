@@ -327,6 +327,18 @@ The add-provider modal adds a `Test config` button:
   incomplete the typed detail is `ok:false` + `code`, but the UI never blocks
   Save.
 
+## D22 - Local Desktop Package Foundation
+
+The desktop is now buildable as a local dev artifact:
+
+- `package.json` declares `electron` and `esbuild` dev dependencies.
+- `npm run desktop:dist` bundles `desktop/src/main.ts` into `dist/desktop/main.mjs`
+  and `preload.cjs` into `dist/desktop/preload.cjs`, then copies the renderer.
+- `npm run desktop:dev` starts Electron on that bundle; `desktop:selftest`
+  drives the existing headless self-test.
+- Renderer remains static. Engine, provider, egress, and persistence paths are unchanged.
+- First-run hint is a small inline reminder, not a wizard.
+
 ```sh
 npm install        # isolated to this directory; runtime deps remain ZERO
 npm run typecheck  # tsc --noEmit (strict)
