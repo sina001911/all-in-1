@@ -23,6 +23,11 @@ export interface Persistable {
 /** One recorded run of a workflow or specialist command. */
 export interface RunRecord {
   readonly id: string;
+  /**
+   * Which runtime produced this run (D27). Absent on records written before
+   * D27, which are workflow runs.
+   */
+  readonly kind?: "workflow" | "agent";
   readonly mode: string;
   readonly subject: string;
   readonly startedAt: number;

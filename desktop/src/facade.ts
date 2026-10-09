@@ -762,6 +762,37 @@ export class DesktopFacade {
     this.stack.streamBridge.start(request.runId);
     const appendEvent = (e: import("../../src/execution/types.ts").StreamEvent) =>
       this.stack.streamBridge.append(request.runId, e);
+    const startedAt = Date.now();
+
+    // D27: a run that paused for a human is a continuation, but only when the
+    // runtime still holds its conversation — a run whose record survived a
+    // restart is not resumable, so this is what keeps the record's start time
+    // and turn count honest. Its earlier turns already wrote their accounting,
+    // and the loop's turn indices are cumulative, so only the later turns are
+    // accounted again.
+    const prior = this.stack.runStore.get(request.runId);
+    const continuation = !!(
+      prior &&
+      prior.pausedForHuman &&
+      prior.status !== "running" &&
+      this.stack.agent.hasRun(request.runId)
+    );
+
+    this.stack.runStore.record({
+      id: request.runId,
+      kind: "agent",
+      mode: request.mode,
+      // The Runs list labels the run by the prompt it opened with; a steering
+      // prompt on a continuation does not relabel the run.
+      subject: continuation ? prior!.subject : agentSubject(request.prompt),
+      startedAt: continuation ? prior!.startedAt : startedAt,
+      status: "running",
+      ok: false,
+      iterations: continuation ? prior!.iterations : 0,
+      pausedForHuman: false,
+      escalated: false,
+    });
+
     try {
       const settled = await this.stack.agent.run({
         ...request,
@@ -772,6 +803,7 @@ export class DesktopFacade {
         onStreamEvent: streaming ? appendEvent : undefined,
       });
       this.stack.streamBridge.done(request.runId);
+      this.recordAgentOutcome(request.runId, settled, signal.aborted);
       return settled;
     } catch (e) {
       const err = e as { code?: string; message?: string };
@@ -779,8 +811,18 @@ export class DesktopFacade {
         code: err.code ?? "PROVIDER_CALL_FAILED",
         message: (err.message ?? "unknown error").slice(0, 280),
       });
+      // D27: the run still ends on the record — with the typed code, and no
+      // accounting, because no turn settled.
+      this.stack.runStore.update(request.runId, {
+        finishedAt: Date.now(),
+        status: "failed",
+        ok: false,
+        errorCode: err.code ?? "AGENT_FAILED",
+      });
+      this.stack.runStore.save();
       throw e;
     } finally {
+      this.stack.usageStore.save();
       this.stack.cancellation.release(request.runId);
       // A cancelled run leaves any raised approval DANGLING: denial is the
       // conservative end state so no decision it raised can outlive it.
@@ -792,6 +834,59 @@ export class DesktopFacade {
         }
       }
     }
+  }
+
+  /**
+   * D27: persist an agent run's outcome and the accounting for the turns this
+   * call settled. The run becomes visible in the Runs view, and its spend
+   * becomes visible in the usage store — the budget ledger was already charged
+   * by the engine, so this is what keeps the accounting and the ledger agreed.
+   */
+  private recordAgentOutcome(runId: string, result: AgentResult, aborted: boolean): void {
+    const cancelled = aborted || result.error?.code === "AGENT_CANCELLED";
+    const status: RunRecord["status"] = cancelled ? "cancelled" : result.ok ? "completed" : "failed";
+    this.stack.runStore.update(runId, {
+      finishedAt: Date.now(),
+      status,
+      ok: result.ok && !cancelled,
+      errorCode: cancelled ? "AGENT_CANCELLED" : result.error?.code,
+      // The loop's counter is cumulative across continuation calls.
+      iterations: result.turns,
+      pausedForHuman: result.pausedForHuman,
+      escalated: result.escalated,
+      deliverable: result.text.length > 0 ? result.text : undefined,
+    });
+
+    // One record per turn THIS call settled, indexed by the turn's absolute
+    // position in the run, so a continued run's records never collide with the
+    // ids the earlier call already wrote and no turn is ever accounted twice.
+    // `committedUsd` is the same number the budget ledger already committed, so
+    // usage totals and the ledger cannot disagree. Token counts are written
+    // only when the provider emitted a usage frame; absent means unreported.
+    // A turn that never settled an invocation (a refused gate, a mode
+    // violation, a cancelled run) writes no record — its cost is genuinely
+    // nothing, and the run's error stays on the run record instead.
+    for (const turn of result.accounting ?? []) {
+      this.stack.usageStore.record({
+        id: `usage-${runId}-${turn.turn}`,
+        runId,
+        ts: Date.now(),
+        modelId: turn.modelId,
+        capability: turn.capability,
+        adapterId: turn.adapterId,
+        promptTokens: turn.promptTokens,
+        completionTokens: turn.completionTokens,
+        costUsd: Math.max(0, turn.committedUsd),
+        latencyMs: turn.latencyMs,
+        // Accounting exists only for a turn the engine settled and charged, so
+        // the invocation itself succeeded; what happened to its tool calls is
+        // on the run record and the tool audit, not here.
+        outcome: "ok",
+      });
+    }
+
+    this.stack.runStore.save();
+    this.stack.usageStore.save();
   }
 
   /**
@@ -938,4 +1033,15 @@ function summarize(response: { ok: boolean; structured?: unknown }): string {
 
 function wantPlanOf(req: DiagnosticRequest, result: WorkflowResult): boolean {
   return (req.plan ?? defaultPlanFor(req.mode)) && !!result.plan;
+}
+
+/**
+ * D27: the prompt is the agent run's subject — the thing the run was about, so
+ * the Runs view can show it next to the workflow runs. Bounded, because a
+ * prompt is unbounded user text and the record is persisted verbatim.
+ */
+function agentSubject(prompt: string): string {
+  const text = prompt.trim();
+  if (text.length <= 160) return text;
+  return `${text.slice(0, 157)}…`;
 }

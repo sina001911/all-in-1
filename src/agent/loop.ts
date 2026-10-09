@@ -22,6 +22,7 @@
  * and may steer it with a new prompt.
  */
 import type {
+  AccountedTurn,
   AgentRequest,
   AgentResult,
   GatewayTurnRequest,
@@ -79,6 +80,16 @@ export class AgentRuntime {
 
   constructor(opts: AgentRuntimeOptions) {
     this.opts = opts;
+  }
+
+  /**
+   * True when a run is live in THIS process and can therefore be continued
+   * (D27). A paused run whose record survived a restart is not continuable —
+   * its conversation lives in memory — so a caller re-invoking such an id is
+   * starting over, not resuming.
+   */
+  hasRun(runId: string): boolean {
+    return this.runs.has(runId);
   }
 
   /**
@@ -153,16 +164,26 @@ export class AgentRuntime {
 
   private async advance(run: RunState): Promise<AgentResult> {
     const req = run.request;
+    // D27: the turns THIS call settles. Kept per call, never on the run state:
+    // a paused run's continuation must account only for its own later turns, so
+    // the records the earlier call already wrote are never rewritten.
+    const settled: AccountedTurn[] = [];
 
     while (!run.done) {
       // Cancellation is honoured before every turn and between every call.
       if (req.signal?.aborted) {
         this.runs.delete(req.runId);
-        return this.toResult(run, false, {
-          code: "AGENT_CANCELLED",
-          message: "agent run cancelled by the caller",
-          retryable: false,
-        });
+        return this.toResult(
+          run,
+          false,
+          {
+            code: "AGENT_CANCELLED",
+            message: "agent run cancelled by the caller",
+            retryable: false,
+          },
+          false,
+          settled,
+        );
       }
 
       // Autonomy bounds between turns. The frozen guard enforces the hard
@@ -176,15 +197,21 @@ export class AgentRuntime {
           const err = toError(e);
           const code = /maxIterations|maxEdits/.test(err.message) ? "AGENT_TURN_LIMIT" : "AGENT_DRY_RUN_REQUIRED";
           this.runs.delete(req.runId);
-          return this.toResult(run, false, { ...err, code });
+          return this.toResult(run, false, { ...err, code }, false, settled);
         }
         if (mustPauseForHuman(run.auto, run.state)) {
           this.runs.delete(req.runId);
-          return this.toResult(run, false, {
-            code: "AGENT_ESCALATED",
-            message: "agent run escalated; human intervention required before continuing",
-            retryable: false,
-          });
+          return this.toResult(
+            run,
+            false,
+            {
+              code: "AGENT_ESCALATED",
+              message: "agent run escalated; human intervention required before continuing",
+              retryable: false,
+            },
+            false,
+            settled,
+          );
         }
       }
 
@@ -207,7 +234,7 @@ export class AgentRuntime {
       } catch (e) {
         const err = toError(e);
         if (err.retryable) run.state.escalated = true;
-        return this.toResult(run, err.retryable, err, err.retryable);
+        return this.toResult(run, err.retryable, err, err.retryable, settled);
       }
 
       if (!turn.ok || !turn.text && !turn.toolCalls?.length) {
@@ -219,8 +246,14 @@ export class AgentRuntime {
         if (turn.ok === false && err.retryable) run.state.escalated = true;
         const paused = err.retryable;
         if (!paused) this.runs.delete(req.runId);
-        return this.toResult(run, paused, err, paused);
+        return this.toResult(run, paused, err, paused, settled);
       }
+
+      // D27: this turn settled an invocation, so account for it. The index is
+      // the run's absolute turn counter — cumulative across a paused run's
+      // continuation calls — and the settlement is exactly what the engine
+      // already charged the budget ledger.
+      if (turn.accounting) settled.push({ ...turn.accounting, turn: run.turn });
 
       const toolCalls = turn.toolCalls ?? [];
       run.history.push({
@@ -256,22 +289,34 @@ export class AgentRuntime {
       }
       if (cancelled) {
         this.runs.delete(req.runId);
-        return this.toResult(run, false, {
-          code: "AGENT_CANCELLED",
-          message: "agent run cancelled by the caller",
-          retryable: false,
-        });
+        return this.toResult(
+          run,
+          false,
+          {
+            code: "AGENT_CANCELLED",
+            message: "agent run cancelled by the caller",
+            retryable: false,
+          },
+          false,
+          settled,
+        );
       }
       // An aborted run never continues to another turn, even if its calls
       // settled (a pending approval is released as TOOL_CANCELLED, for
       // instance). The caller ended the run; the loop honours it here too.
       if (req.signal?.aborted) {
         this.runs.delete(req.runId);
-        return this.toResult(run, false, {
-          code: "AGENT_CANCELLED",
-          message: "agent run cancelled by the caller",
-          retryable: false,
-        });
+        return this.toResult(
+          run,
+          false,
+          {
+            code: "AGENT_CANCELLED",
+            message: "agent run cancelled by the caller",
+            retryable: false,
+          },
+          false,
+          settled,
+        );
       }
 
       // The dry-run-first rule: an iteration that changed nothing counts as the
@@ -283,12 +328,12 @@ export class AgentRuntime {
       // Without autonomy, a human turn ends here — successfully so far. The
       // caller continues the run with another `run` on the same runId.
       if (!run.auto.auto) {
-        return this.toResult(run, true, undefined, true);
+        return this.toResult(run, true, undefined, true, settled);
       }
     }
 
     this.runs.delete(req.runId);
-    return this.toResult(run, true);
+    return this.toResult(run, true, undefined, false, settled);
   }
 
   private async executeCall(run: RunState, call: ToolCall): Promise<ToolCallOutcome> {
@@ -343,6 +388,10 @@ export class AgentRuntime {
     ok: boolean,
     error?: { code: string; message: string; retryable: boolean },
     pausedForHuman = false,
+    // D27: the turns this call settled. Absent when the call settled none (a
+    // mode violation, a refused gate, a cancelled run), so a run that invoked
+    // nothing reports nothing rather than a plausible-looking zero ledger.
+    settled?: readonly AccountedTurn[],
   ): AgentResult {
     return {
       ok,
@@ -357,6 +406,7 @@ export class AgentRuntime {
       pausedForHuman,
       escalated: run.state.escalated,
       error,
+      accounting: settled && settled.length > 0 ? [...settled] : undefined,
     };
   }
 

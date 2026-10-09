@@ -105,6 +105,35 @@ export interface GatewayTurnResult {
   readonly toolCalls?: readonly ToolCall[];
   readonly finishReason?: string;
   readonly error?: { readonly code: string; readonly message: string; readonly retryable: boolean };
+  /**
+   * What this turn's invocation actually consumed (D27). Present only when the
+   * engine settled an invocation; a turn that never reached the engine (egress,
+   * approval, budget refusal, a thrown call) carries no accounting at all.
+   */
+  readonly accounting?: TurnSettlement;
+}
+
+/**
+ * What one settled model turn actually consumed (D27). Every number comes off
+ * the execution outcome the engine already settled: `committedUsd` is the same
+ * figure the budget ledger committed, and the token counts are present only
+ * when the provider emitted a usage frame during a streamed turn — never
+ * estimated, never defaulted, never invented.
+ */
+export interface TurnSettlement {
+  /** The catalogue model id, `provider/model`. */
+  readonly modelId: string;
+  /** The adapter that served the turn's invocation. */
+  readonly adapterId: string;
+  /** The capability the agent turn routed through. */
+  readonly capability: string;
+  /** Actual spend committed to the budget ledger for this turn, in USD. */
+  readonly committedUsd: number;
+  readonly latencyMs: number;
+  /** Provider-reported prompt tokens; absent when the provider reported none. */
+  readonly promptTokens?: number;
+  /** Provider-reported completion tokens; absent when the provider reported none. */
+  readonly completionTokens?: number;
 }
 
 export interface AgentRequest {
@@ -154,4 +183,22 @@ export interface AgentResult {
   readonly pausedForHuman: boolean;
   readonly escalated: boolean;
   readonly error?: { readonly code: string; readonly message: string; readonly retryable: boolean };
+  /**
+   * One entry per model turn THIS call settled (D27), each carrying its
+   * absolute position in the run. A turn that never reached the engine is
+   * absent; a turn that did is accounted exactly once, even across a paused
+   * run's continuation calls.
+   */
+  readonly accounting?: readonly AccountedTurn[];
+}
+
+/**
+ * One turn's settlement with its absolute position in the run (D27). The index
+ * is cumulative across continuation calls — a run that paused for a human and
+ * resumed settles later turns at higher indices, so the accounting records the
+ * earlier turns wrote are never rewritten or double-counted.
+ */
+export interface AccountedTurn extends TurnSettlement {
+  /** 0-based index of this turn in the whole run, counting earlier calls' turns. */
+  readonly turn: number;
 }

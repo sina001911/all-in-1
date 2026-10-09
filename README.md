@@ -374,6 +374,39 @@ Nothing is invented and nothing is rounded up:
   usage store, so the spend remains visible.
 - The derivation is strictly read-only: it records nothing and writes no file.
 
+## D27 — Agent Runs Are Accounted and Visible
+
+The agent path invoked the execution engine — committing real spend to the
+budget ledger — but recorded neither a run record nor a usage record. Agent
+runs were absent from the Runs view, and the usage totals silently excluded
+spend the ledger had already charged, so the two could disagree. The workflow
+path had been accounted since D24/D26; the agent path never was.
+
+- `GatewayTurnResult` now carries what its invocation actually consumed, taken
+  straight off the settled `ExecutionOutcome` (the same source the specialist
+  runner uses): model, adapter, capability, the exact `committedUsd` the ledger
+  was charged, latency, and token counts only when the provider emitted a usage
+  frame.
+- `AgentResult.accounting` reports one entry per turn THIS call settled, each
+  carrying its absolute turn index — cumulative across a paused run's
+  continuation calls.
+- `DesktopFacade.runAgent` records the run (kind `agent`, labelled by the
+  prompt it opened with) and writes one usage record per settled turn, indexed
+  by that turn's position in the run. The Runs table distinguishes agent runs
+  from workflow runs; the run detail reads `turns` instead of `iterations`.
+- A continuation is only a continuation when the runtime still holds the
+  conversation: a paused record that survived a restart is a new start, not a
+  resume, and is accounted as one.
+
+The same honesty rules as D24/D26 apply, unchanged:
+
+- A turn that never settled an invocation (a refused gate, a mode violation, a
+  cancellation) writes no record; its run reports a genuine zero ledger and the
+  error stays on the run record.
+- Cost is the same number the budget ledger already committed, so usage totals
+  and the ledger cannot disagree; a paid agent turn charges the ledger exactly
+  once, even across a pause and resume.
+
 
 ```sh
 npm install        # isolated to this directory; runtime deps remain ZERO

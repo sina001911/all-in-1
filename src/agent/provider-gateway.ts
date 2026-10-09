@@ -53,6 +53,27 @@ export class ProviderModelGateway implements ModelGateway {
     // tool schemas the mode permits are handed to the provider as declarations,
     // so the model can shape a call — and nothing else.
     const text = renderTranscript(request);
+    // D27: capture provider-reported token counts from the stream WITHOUT
+    // detouring the caller's sink. Only a usage frame the provider actually
+    // emitted sets these; nothing is estimated or defaulted. Interception is
+    // keyed on streaming alone, so accounting never depends on an unrelated
+    // caller choosing to install a sink.
+    let promptTokens: number | undefined;
+    let completionTokens: number | undefined;
+    const callerSink = options?.onStreamEvent;
+    const invokeOptions =
+      request.streaming === true
+        ? {
+            ...options,
+            onStreamEvent: (event: import("../execution/types.ts").StreamEvent) => {
+              if (event.kind === "usage") {
+                promptTokens = event.promptTokens;
+                completionTokens = event.completionTokens;
+              }
+              callerSink?.(event);
+            },
+          }
+        : options;
     try {
       const outcome = await this.opts.engine.invoke(
         {
@@ -71,7 +92,7 @@ export class ProviderModelGateway implements ModelGateway {
           // travel if the caller's InvokeOptions carry an onStreamEvent.
           streaming: request.streaming === true,
         },
-        options,
+        invokeOptions,
       );
       const result = outcome.result;
       return {
@@ -79,6 +100,18 @@ export class ProviderModelGateway implements ModelGateway {
         text: result.text,
         toolCalls: (result.toolCalls ?? []).map(fromProviderCall),
         finishReason: result.finishReason,
+        // D27: straight off the settled outcome. `committedUsd` is the same
+        // number the budget ledger already committed, so the accounting a run
+        // reports can never disagree with what the ledger was charged.
+        accounting: {
+          modelId: result.modelId,
+          adapterId: outcome.adapterId,
+          capability: result.capability,
+          committedUsd: Math.max(0, outcome.committedUsd),
+          latencyMs: result.latencyMs,
+          promptTokens,
+          completionTokens,
+        },
       };
     } catch (e) {
       const err = e as { code?: string; message: string; retryable?: boolean };

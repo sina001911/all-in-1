@@ -18,6 +18,7 @@
  */
 import { buildSpecialistStack, type SpecialistStack } from "../../src/specialists/stack.ts";
 import { SwappablePortal } from "../../src/execution/swappable-portal.ts";
+import type { InvocationPortal } from "../../src/execution/engine.ts";
 import { FROZEN_DEFAULTS } from "../../src/config/schema.ts";
 import { buildToolRuntime, type ToolRuntime } from "../../src/tools/index.ts";
 import { buildAgentRuntime, type AgentRuntime } from "../../src/agent/index.ts";
@@ -91,9 +92,19 @@ export interface DesktopStackOptions {
     readonly logStore?: LogStore;
     /**
      * Inject the engine portal the specialist runner invokes (D25). The
-     * observability seam still wraps it. Production builds leave this unset.
+     * observability seam still wraps it, so logging and redaction are
+     * unchanged. Production builds leave this unset.
      */
     readonly engine?: InvocationPortal;
+    /**
+     * Inject the engine portal the AGENT gateway invokes (D27). The agent path
+     * does not go through the specialist runner, so `overrides.engine` does not
+     * reach it; this is the equivalent seam for tests that need a deterministic
+     * paid agent outcome. Production builds leave this unset and the agent
+     * speaks to the same swappable portal as everything else, so a provider
+     * hot-reload still takes effect for agent turns.
+     */
+    readonly agentEngine?: InvocationPortal;
   };
 }
 
@@ -163,8 +174,12 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
   // engine, hence through the frozen gates; the agent holds the tool runtime,
   // never the approver, so a tool request from the model can only be settled
   // by the human behind `toolApprover`. D10: the gateway sees the swappable
-  // portal, so a rebuilt provider stack takes effect for the agent too.
-  const agentGateway = new ProviderModelGateway({ engine: portal });
+  // portal, so a rebuilt provider stack takes effect for the agent too. D27: a
+  // test may inject a deterministic paid engine for the agent path alone; it
+  // gets its own portal, so nothing else in the stack is affected.
+  const agentGateway = new ProviderModelGateway({
+    engine: opts.overrides?.agentEngine ? new SwappablePortal(opts.overrides.agentEngine) : portal,
+  });
   const agent = buildAgentRuntime({ tools, gateway: agentGateway });
 
   const stack: DesktopStack = {

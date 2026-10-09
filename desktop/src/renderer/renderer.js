@@ -678,6 +678,17 @@
     return Math.max(0, run.finishedAt - run.startedAt) + " ms";
   }
 
+  /**
+   * D27: agent runs and workflow runs share the table. The label says which
+   * runtime a row came from, so an agent turn count is never mistaken for a
+   * workflow step count. Records written before D27 have no `kind` and are
+   * workflow runs.
+   */
+  function runKindLabel(run) {
+    if (run.kind === "agent") return "agent · " + run.mode;
+    return run.mode;
+  }
+
   /** Formats a cost exactly as reported: $0 stays $0, a NaN shows as unknown. */
   function formatUsd(n) {
     var v = Number(n);
@@ -737,7 +748,7 @@
         },
       }, [
         h("td", { class: "mono", text: String(run.id) }),
-        h("td", null, [Badge(run.mode, "info")]),
+        h("td", null, [Badge(runKindLabel(run), run.kind === "agent" ? "ok" : "info")]),
         h("td", { text: String(run.subject || "(no subject)") }),
         h("td", null, [Badge(run.status, tone)]),
         h("td", { text: durationOf(run) }),
@@ -765,10 +776,11 @@
     }
     var facts = [
       ["run id", run.id],
+      ["kind", runKindLabel(run)],
       ["mode", run.mode],
       ["subject", run.subject || "(none)"],
       ["status", run.status],
-      ["iterations", String(run.iterations)],
+      [run.kind === "agent" ? "turns" : "iterations", String(run.iterations)],
       ["paused for human", String(run.pausedForHuman)],
       ["escalated", String(run.escalated)],
       ["error", run.errorCode || "none"],
