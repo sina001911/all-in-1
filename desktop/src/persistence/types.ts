@@ -12,6 +12,7 @@
  * `persistent-budget-ledger.ts` so the engine keeps holding the exact types it
  * always held, and existing in-memory behaviour is untouched.
  */
+import type { ModelRole } from "../../src/registry/roles.ts";
 
 /** A store that can flush its current state and be reloaded. */
 export interface Persistable {
@@ -33,6 +34,13 @@ export interface RunRecord {
   readonly pausedForHuman: boolean;
   readonly escalated: boolean;
   readonly deliverable?: string;
+  /**
+   * The step roles the run executes, in order (D26). Part of the run's identity:
+   * a resumed run derives the steps it still has to run from this sequence, so a
+   * caller re-invoking an unfinished run cannot silently change its order. Absent
+   * on records written before D26; such runs fall back to the caller's steps.
+   */
+  readonly steps?: readonly ModelRole[];
 }
 
 export interface RunStore extends Persistable {

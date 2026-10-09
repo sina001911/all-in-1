@@ -214,23 +214,44 @@ export class DesktopFacade {
     const streaming = req.streaming === true;
     const signal = this.stack.cancellation.signalFor(runId);
     const startedAt = Date.now();
+
+    // D26: resuming a paused run continues from the steps it already settled.
+    // The loop keeps its cursor per instance, but the facade rebuilds the loop on
+    // every call (and the stack may be hot-reloaded in between), so the resume
+    // point is derived from the PERSISTED run record instead: a run that paused
+    // for a human has `iterations` equal to the number of steps it completed.
+    const prior = this.stack.runStore.get(runId);
+    const resuming = !!(prior && prior.pausedForHuman && prior.status !== "running");
+    const resumeFrom = resuming ? prior!.iterations : 0;
+
     if (streaming) {
       this.stack.workflowStreamBridge.start(runId);
     }
+
+    // The step sequence is part of the run's identity. On a fresh run it comes
+    // from the request (or the mode defaults); on a resume the persisted sequence
+    // is authoritative, so a caller sending a different list cannot silently
+    // redefine the run's order mid-flight.
+    const roles = resuming && prior!.steps ? prior!.steps : (req.steps ?? DEFAULT_STEPS[req.mode]);
 
     this.stack.runStore.record({
       id: runId,
       mode: req.mode,
       subject: req.subject,
-      startedAt,
+      steps: roles,
+      // A resumed run keeps the moment it originally started and the count of
+      // steps it already completed; a fresh run starts both at zero.
+      startedAt: resuming ? prior!.startedAt : startedAt,
       status: "running",
       ok: false,
-      iterations: 0,
+      iterations: resumeFrom,
       pausedForHuman: false,
       escalated: false,
     });
 
-    const roles = req.steps ?? DEFAULT_STEPS[req.mode];
+    // Only the steps not yet settled are handed to the loop. A completed step is
+    // never re-invoked, so it cannot be charged or accounted a second time.
+    const remaining = roles.slice(resumeFrom);
     const wantPlan = req.plan ?? defaultPlanFor(req.mode);
     const subject = req.subject;
 
@@ -242,7 +263,7 @@ export class DesktopFacade {
         plan: wantPlan,
         signal,
         timeoutMs: req.timeoutMs,
-        steps: roles.map((role) => ({
+        steps: remaining.map((role) => ({
           role,
           prompt: subject,
           inputs: subject ? [{ kind: "text", text: subject }] : [],
@@ -285,7 +306,7 @@ export class DesktopFacade {
         ok: false,
         mode: req.mode,
         text: `[all-in-1 ${req.mode}] failed unexpectedly: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`,
-        iterations: 0,
+        iterations: resumeFrom,
         pausedForHuman: false,
         escalated: false,
         errorCode: "WORKFLOW_FAILED",
@@ -301,20 +322,23 @@ export class DesktopFacade {
       status,
       ok: result.ok && !cancelled,
       errorCode: cancelled ? "WORKFLOW_CANCELLED" : result.error?.code,
-      iterations: result.iterations,
+      // The loop's cursor counts only this call's steps; add back the steps the
+      // run had already completed before this (possibly resumed) invocation.
+      iterations: resumeFrom + result.iterations,
       pausedForHuman: result.pausedForHuman,
       escalated: result.escalated,
       deliverable: text,
     });
 
-    // D25: account what the run ACTUALLY consumed, one record per settled
-    // invocation, straight off each step's `ExecutionOutcome`. `committedUsd` is
-    // the same number the budget ledger already committed, so the usage totals
-    // and the ledger can never disagree. Token counts are written only when the
-    // provider emitted a usage frame; absent means unreported, never zero-invented.
-    // A step that never settled an invocation (unknown role, refused tools) has
-    // no accounting and writes no record — its cost is genuinely nothing.
-    let accounted = 0;
+    // D25/D26: one record per step settled in THIS call, indexed by that step's
+    // position in the WHOLE run, so a resumed run's records never collide with
+    // the ids the earlier call already wrote and no step is ever accounted twice.
+    // `committedUsd` is the same number the budget ledger already committed, so
+    // usage totals and the ledger cannot disagree. Token counts are written only
+    // when the provider emitted a usage frame; absent means unreported, never
+    // zero-invented. A step that never settled an invocation (unknown role,
+    // refused tools) has no accounting and writes no record — its cost is
+    // genuinely nothing, and the run's error stays on the run record instead.
     result.results.forEach((step, index) => {
       const a = step.accounting;
       if (!a) return;
@@ -326,7 +350,7 @@ export class DesktopFacade {
             ? "timeout"
             : "failed";
       this.stack.usageStore.record({
-        id: `usage-${runId}-${index}`,
+        id: `usage-${runId}-${resumeFrom + index}`,
         runId,
         ts: Date.now(),
         modelId: a.modelId,
@@ -339,28 +363,12 @@ export class DesktopFacade {
         outcome: stepOutcome,
         errorCode: step.response.ok ? undefined : step.response.error.code,
       });
-      accounted += 1;
     });
 
-    // A run that settled no invocation at all still needs an accounting presence
-    // so its ledger is visibly zero rather than missing — but it is recorded as
-    // exactly that: no model, no cost, no invented tokens.
-    if (accounted === 0) {
-      this.stack.usageStore.record({
-        id: `usage-${runId}`,
-        runId,
-        ts: Date.now(),
-        modelId: "unsettled",
-        capability: roles.join(","),
-        adapterId: "none",
-        promptTokens: undefined,
-        completionTokens: undefined,
-        costUsd: 0,
-        latencyMs: Date.now() - startedAt,
-        outcome: cancelled ? "cancelled" : result.ok ? "ok" : "failed",
-        errorCode: cancelled ? "WORKFLOW_CANCELLED" : result.error?.code,
-      });
-    }
+    // A run that settled no invocation writes no usage record at all: there was
+    // nothing to account, and `getRunUsage` reports that run's honest zero ledger
+    // (invocations 0, models []) straight off the empty record set. The failure
+    // that stopped it stays on the run record's status and errorCode.
 
     this.stack.usageStore.save();
     this.stack.runStore.save();
@@ -372,7 +380,8 @@ export class DesktopFacade {
       ok: result.ok && !cancelled,
       mode: req.mode,
       text,
-      iterations: result.iterations,
+      // Report the run's total progress, not just this call's slice of it.
+      iterations: resumeFrom + result.iterations,
       pausedForHuman: result.pausedForHuman,
       escalated: result.escalated,
       errorCode: cancelled ? "WORKFLOW_CANCELLED" : result.error?.code,
