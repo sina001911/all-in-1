@@ -18,7 +18,7 @@
  * The runner performs no network call of its own, reads no credential, and
  * never writes a file.
  */
-import type { SpecialistRequest, SpecialistResponse } from "./types.ts";
+import type { SpecialistAccounting, SpecialistRequest, SpecialistResponse } from "./types.ts";
 import type { SpecialistRegistry } from "./registry.ts";
 import type { InvocationPortal, InvokeOptions } from "../execution/engine.ts";
 import type { SelectionRequest } from "../models/types.ts";
@@ -73,9 +73,31 @@ export class SpecialistRunner {
       streaming: request.streaming === true,
     };
 
+    // D25: capture provider-reported token counts from the stream WITHOUT
+    // detouring the caller's sink. Only a usage frame the provider actually
+    // emitted sets these; nothing is estimated or defaulted. Interception is
+    // keyed on streaming alone, so accounting never depends on an unrelated
+    // caller choosing to install a sink.
+    let promptTokens: number | undefined;
+    let completionTokens: number | undefined;
+    const callerSink = options?.onStreamEvent;
+    const invokeOptions =
+      request.streaming === true
+        ? {
+            ...options,
+            onStreamEvent: (event: import("../execution/types.ts").StreamEvent) => {
+              if (event.kind === "usage") {
+                promptTokens = event.promptTokens;
+                completionTokens = event.completionTokens;
+              }
+              callerSink?.(event);
+            },
+          }
+        : options;
+
     let outcome;
     try {
-      outcome = await this.opts.engine.invoke(selection, options);
+      outcome = await this.opts.engine.invoke(selection, invokeOptions);
     } catch (e) {
       const err = e as AllInOneError;
       return failure(
@@ -84,6 +106,18 @@ export class SpecialistRunner {
         err.retryable ?? false,
       );
     }
+
+    // D25: what this invocation actually consumed, straight off the settled
+    // outcome. `committedUsd` is the same number the budget ledger committed.
+    const accounting = {
+      modelId: outcome.result.modelId,
+      adapterId: outcome.adapterId,
+      capability,
+      committedUsd: Math.max(0, outcome.committedUsd),
+      latencyMs: outcome.result.latencyMs,
+      promptTokens,
+      completionTokens,
+    };
 
     // 4. Validate the structured output before it reaches a consumer.
     const schema = (request.outputSchema ?? known[0]?.defaultOutputSchema) as Schema | undefined;
@@ -95,6 +129,7 @@ export class SpecialistRunner {
           "STRUCTURED_OUTPUT_INVALID",
           `${outcome.adapterId} returned no structured output to validate`,
           false,
+          accounting,
         );
       }
       const verdict = validateStructured(value, schema);
@@ -103,19 +138,25 @@ export class SpecialistRunner {
           "STRUCTURED_OUTPUT_INVALID",
           `Structured output failed the declared schema: ${describe(verdict.failures)}`,
           false,
+          accounting,
         );
       }
-      return { ok: true, structured: value };
+      return { ok: true, structured: value, accounting };
     }
 
     // No schema declared: pass through, but never as an unvalidated claim that
     // a contract was met.
-    return { ok: true, structured: outcome.result.structured ?? null };
+    return { ok: true, structured: outcome.result.structured ?? null, accounting };
   }
 }
 
-function failure(code: string, message: string, retryable: boolean): SpecialistResponse {
-  return { ok: false, error: { code, message, retryable } };
+function failure(
+  code: string,
+  message: string,
+  retryable: boolean,
+  accounting?: SpecialistAccounting,
+): SpecialistResponse {
+  return { ok: false, error: { code, message, retryable }, accounting };
 }
 
 function describe(failures: readonly { path: string; message: string }[]): string {

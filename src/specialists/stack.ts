@@ -14,6 +14,7 @@ import type { UserProvidedProvider } from "../execution/user-providers.ts";
 import type { ApprovalStore } from "../registry/approvals.ts";
 import type { BudgetLedger } from "../registry/budget.ts";
 import { LoggedExecutionEngine } from "../observability/execution-logger.ts";
+import type { InvocationPortal } from "../execution/engine.ts";
 import {
   SpecialistRegistry,
   registerBaselineSpecialists,
@@ -37,6 +38,13 @@ export function buildSpecialistStack(opts: {
   /** Inject a pre-built budget ledger (e.g. a persistent one). */
   budget?: BudgetLedger;
   /**
+   * Inject a pre-built engine portal. When present it wraps the built engine in
+   * the observability seam and runs every invocation through it, so gates,
+   * logging and redaction still apply. Used by tests that need a deterministic
+   * paid outcome; production builds leave this unset.
+   */
+  engine?: InvocationPortal;
+  /**
    * Register the deterministic tool-capable agent model (D4). Opt-in; the
    * default stack is unchanged.
    */
@@ -52,7 +60,8 @@ export function buildSpecialistStack(opts: {
   const stack = buildExecutionStack(opts);
   const sink = opts.logSink ?? new MemorySink();
   const logger = new Logger(sink, "specialist");
-  const logged = new LoggedExecutionEngine({ engine: stack.engine, logger });
+  const inner: InvocationPortal = opts.engine ?? stack.engine;
+  const logged = new LoggedExecutionEngine({ engine: inner, logger });
   const specialists = new SpecialistRegistry();
   registerBaselineSpecialists(specialists);
   const runner = new SpecialistRunner({ engine: logged, specialists });

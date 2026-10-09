@@ -19,7 +19,7 @@
  * hence through every security gate. The workflow is subordinate to those
  * gates: it never retries past an egress, approval, or budget refusal.
  */
-import type { SpecialistRequest, SpecialistResponse } from "../specialists/types.ts";
+import type { SpecialistAccounting, SpecialistRequest, SpecialistResponse } from "../specialists/types.ts";
 import type { SpecialistRunner } from "../specialists/runner.ts";
 import type { StreamEvent } from "../execution/types.ts";
 import type { ModelRole } from "../registry/roles.ts";
@@ -59,6 +59,13 @@ export interface WorkflowRequest {
 export interface StepResult {
   readonly role: ModelRole;
   readonly response: SpecialistResponse;
+  /**
+   * D25: what this step's invocation actually consumed. Mirrors
+   * `response.accounting` so a consumer never has to reach into the response
+   * union to account for the run. Absent when the step never settled an
+   * invocation (e.g. the specialist role was unknown).
+   */
+  readonly accounting?: SpecialistAccounting;
 }
 
 export interface WorkflowResult {
@@ -176,7 +183,7 @@ export class WorkflowLoop {
         return this.toResult(false, toError(e));
       }
 
-      this.results.push({ role: baseStep.role, response });
+      this.results.push({ role: baseStep.role, response, accounting: response.accounting });
       this.cursor += 1;
 
       if (!response.ok) {

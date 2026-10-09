@@ -307,23 +307,61 @@ export class DesktopFacade {
       deliverable: text,
     });
 
-    // D1 accounts at run granularity with values that are actually observable.
-    // Per-invocation token accounting arrives with real providers (D4); the
-    // deterministic local adapter is genuinely zero-cost, so costUsd is 0 by
-    // construction here — never an invented number.
-    const usage: UsageRecord = {
-      id: `usage-${runId}`,
-      runId,
-      ts: Date.now(),
-      modelId: "local/deterministic",
-      capability: roles.join(","),
-      adapterId: "local",
-      costUsd: 0,
-      latencyMs: Date.now() - startedAt,
-      outcome: cancelled ? "cancelled" : result.ok ? "ok" : "failed",
-      errorCode: cancelled ? "WORKFLOW_CANCELLED" : result.error?.code,
-    };
-    this.stack.usageStore.record(usage);
+    // D25: account what the run ACTUALLY consumed, one record per settled
+    // invocation, straight off each step's `ExecutionOutcome`. `committedUsd` is
+    // the same number the budget ledger already committed, so the usage totals
+    // and the ledger can never disagree. Token counts are written only when the
+    // provider emitted a usage frame; absent means unreported, never zero-invented.
+    // A step that never settled an invocation (unknown role, refused tools) has
+    // no accounting and writes no record — its cost is genuinely nothing.
+    let accounted = 0;
+    result.results.forEach((step, index) => {
+      const a = step.accounting;
+      if (!a) return;
+      const stepOutcome = cancelled
+        ? "cancelled"
+        : step.response.ok
+          ? "ok"
+          : step.response.error.code === "PROVIDER_TIMEOUT"
+            ? "timeout"
+            : "failed";
+      this.stack.usageStore.record({
+        id: `usage-${runId}-${index}`,
+        runId,
+        ts: Date.now(),
+        modelId: a.modelId,
+        capability: a.capability,
+        adapterId: a.adapterId,
+        promptTokens: a.promptTokens,
+        completionTokens: a.completionTokens,
+        costUsd: Math.max(0, a.committedUsd),
+        latencyMs: a.latencyMs,
+        outcome: stepOutcome,
+        errorCode: step.response.ok ? undefined : step.response.error.code,
+      });
+      accounted += 1;
+    });
+
+    // A run that settled no invocation at all still needs an accounting presence
+    // so its ledger is visibly zero rather than missing — but it is recorded as
+    // exactly that: no model, no cost, no invented tokens.
+    if (accounted === 0) {
+      this.stack.usageStore.record({
+        id: `usage-${runId}`,
+        runId,
+        ts: Date.now(),
+        modelId: "unsettled",
+        capability: roles.join(","),
+        adapterId: "none",
+        promptTokens: undefined,
+        completionTokens: undefined,
+        costUsd: 0,
+        latencyMs: Date.now() - startedAt,
+        outcome: cancelled ? "cancelled" : result.ok ? "ok" : "failed",
+        errorCode: cancelled ? "WORKFLOW_CANCELLED" : result.error?.code,
+      });
+    }
+
     this.stack.usageStore.save();
     this.stack.runStore.save();
 

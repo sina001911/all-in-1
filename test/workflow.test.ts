@@ -250,7 +250,9 @@ describe("workflow has no file-writing capability", () => {
       request: { mode: "BUILD", steps: steps(1) },
     });
     const result = await loop.run();
-    const stepKeys: ReadonlyArray<keyof StepResult> = ["role", "response"];
+    // D25 adds an optional `accounting` field: it carries cost/token counters
+    // only, never a path or an edit surface, so the invariant above is intact.
+    const stepKeys: ReadonlyArray<keyof StepResult> = ["role", "response", "accounting"];
     for (const step of result.results) {
       for (const key of Object.keys(step)) {
         expect(stepKeys).toContain(key as keyof StepResult);

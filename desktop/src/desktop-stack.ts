@@ -89,6 +89,11 @@ export interface DesktopStackOptions {
     readonly usageStore?: UsageStore;
     readonly settingsStore?: SettingsStore;
     readonly logStore?: LogStore;
+    /**
+     * Inject the engine portal the specialist runner invokes (D25). The
+     * observability seam still wraps it. Production builds leave this unset.
+     */
+    readonly engine?: InvocationPortal;
   };
 }
 
@@ -121,6 +126,9 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
       approvals,
       budget,
       logSink: new LogStoreSink(logStore),
+      // D25: a test may inject a deterministic paid engine; the observability
+      // seam still wraps it, so logging and redaction are unchanged.
+      engine: opts.overrides?.engine,
       // The desktop runs an agent loop, which needs a tool-capable model. This
       // opts in the deterministic local agent model ONLY as the built-in; a user
       // may additionally register providers below. The frozen posture is
