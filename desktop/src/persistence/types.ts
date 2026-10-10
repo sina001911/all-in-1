@@ -12,7 +12,7 @@
  * `persistent-budget-ledger.ts` so the engine keeps holding the exact types it
  * always held, and existing in-memory behaviour is untouched.
  */
-import type { ModelRole } from "../../src/registry/roles.ts";
+import type { ModelRole } from "../../../src/registry/roles.ts";
 
 /** A store that can flush its current state and be reloaded. */
 export interface Persistable {

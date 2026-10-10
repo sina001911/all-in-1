@@ -166,7 +166,7 @@ describe("resume semantics (auto: false)", () => {
       credentials: new MemoryCredentialProvider(),
       overrides: {
         engine: {
-          invoke: async (request: unknown) => {
+          invoke: async (request) => {
             secondSessionCalls += 1;
             return paidEngine({}).invoke(request);
           },

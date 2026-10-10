@@ -26,7 +26,11 @@ import { OpenAICompatibleAdapter } from "./openai-compatible-adapter.ts";
 export interface UserProvidedModel {
   /** The model name the server knows it by. */
   readonly id: string;
-  readonly displayName: string;
+  /**
+   * Optional: registration falls back to the model id when it is absent (and
+   * again to the provider id), so a descriptor that omits it is still valid.
+   */
+  readonly displayName?: string;
   readonly capabilities?: readonly string[];
   readonly contextLimit?: number;
   readonly outputLimit?: number;
@@ -44,7 +48,11 @@ export interface UserProvidedModel {
 export interface UserProvidedProvider {
   /** Registry id. Must not collide with the built-in `local` adapter. */
   readonly id: string;
-  readonly displayName: string;
+  /**
+   * Optional: registration falls back to the provider id when it is absent, so
+   * a persisted provider that omits it is still a valid registration.
+   */
+  readonly displayName?: string;
   /** Base URL, e.g. `http://127.0.0.1:11434/v1`. */
   readonly endpoint: string;
   /**

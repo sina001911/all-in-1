@@ -146,6 +146,8 @@ type MutableSettingsProviderModel = {
   outputLimit?: number;
   tools?: boolean;
   costPer1MUsd?: { input: number; output: number };
+  // D11: the persisted contract declares this; the builder assigns it above.
+  streaming?: boolean;
 };
 type MutableSettingsProvider = {
   id: string;

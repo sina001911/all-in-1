@@ -155,7 +155,9 @@ describe("SpecialistRunner accounting forwarding", () => {
     });
     const res = await runner.run(step("FAST_TASK"));
     expect(res.ok).toBe(false);
-    expect(res.error.code).toBe("STRUCTURED_OUTPUT_INVALID");
+    if (!res.ok) {
+      expect(res.error.code).toBe("STRUCTURED_OUTPUT_INVALID");
+    }
     // The call still cost something; the accounting is not silently dropped.
     expect(res.accounting?.committedUsd).toBe(0.004);
   });
