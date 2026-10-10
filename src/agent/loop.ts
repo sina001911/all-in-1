@@ -237,7 +237,27 @@ export class AgentRuntime {
         return this.toResult(run, err.retryable, err, err.retryable, settled);
       }
 
-      if (!turn.ok || !turn.text && !turn.toolCalls?.length) {
+      // D27/D28: this turn settled an invocation, so account for it. The index
+      // is the run's absolute turn counter — cumulative across a paused run's
+      // continuation calls — and the settlement is exactly what the engine
+      // already charged the budget ledger. D28: the engine settles and charges
+      // on ANY resolve, including a turn the gateway reports as failed or
+      // empty, so the capture must PRECEDE the gate below — capturing it
+      // afterwards would charge the ledger for a turn the usage store never
+      // records, and the two totals would disagree.
+      const failed = !turn.ok || (!turn.text && !turn.toolCalls?.length);
+      if (turn.accounting) {
+        settled.push({
+          ...turn.accounting,
+          turn: run.turn,
+          // D28: the outcome label follows the gateway's verdict, not the
+          // settlement's presence — a charged turn that produced nothing is a
+          // failed invocation, not a silent success.
+          failed,
+        });
+      }
+
+      if (failed) {
         const err = turn.error ?? {
           code: "PROVIDER_CALL_FAILED",
           message: "the model returned an empty turn",
@@ -248,12 +268,6 @@ export class AgentRuntime {
         if (!paused) this.runs.delete(req.runId);
         return this.toResult(run, paused, err, paused, settled);
       }
-
-      // D27: this turn settled an invocation, so account for it. The index is
-      // the run's absolute turn counter — cumulative across a paused run's
-      // continuation calls — and the settlement is exactly what the engine
-      // already charged the budget ledger.
-      if (turn.accounting) settled.push({ ...turn.accounting, turn: run.turn });
 
       const toolCalls = turn.toolCalls ?? [];
       run.history.push({

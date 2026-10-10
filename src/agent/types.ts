@@ -201,4 +201,12 @@ export interface AgentResult {
 export interface AccountedTurn extends TurnSettlement {
   /** 0-based index of this turn in the whole run, counting earlier calls' turns. */
   readonly turn: number;
+  /**
+   * Present and true when the gateway reported this settled turn as failed or
+   * empty (D28). The engine settles and charges on any resolve, so a
+   * settlement is not evidence the invocation succeeded; this label lets the
+   * recording layer mark the usage record's outcome honestly. Optional, so
+   * every existing producer of a plain `TurnSettlement` stays valid.
+   */
+  readonly failed?: boolean;
 }

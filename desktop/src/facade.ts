@@ -878,10 +878,12 @@ export class DesktopFacade {
         completionTokens: turn.completionTokens,
         costUsd: Math.max(0, turn.committedUsd),
         latencyMs: turn.latencyMs,
-        // Accounting exists only for a turn the engine settled and charged, so
-        // the invocation itself succeeded; what happened to its tool calls is
-        // on the run record and the tool audit, not here.
-        outcome: "ok",
+        // D28: the engine settles and charges on any resolve, including a turn
+        // the gateway reported as failed or empty, so a settlement is not proof
+        // the invocation succeeded. The outcome label follows the gateway's
+        // verdict; what happened to its tool calls stays on the run record and
+        // the tool audit, not here.
+        outcome: turn.failed ? "failed" : "ok",
       });
     }
 
