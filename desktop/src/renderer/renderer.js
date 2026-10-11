@@ -904,7 +904,12 @@
         diagStreamTimer = setInterval(function () { pollDiagStream(request.runId); }, 300);
       }
       var result = await api.runDiagnostic(request);
-      diagRunId = result.runId;
+      // D29: keep the id only while the run is still resumable. The diagnostic
+      // path reuses an id to CONTINUE a paused run (D26); a completed or failed
+      // run must not lend its id to the next one, or that fresh run lands on a
+      // used key — its usage records append under colliding ids while the run
+      // record is replaced, and one Runs row silently reports two runs' spend.
+      diagRunId = result.pausedForHuman ? result.runId : null;
       text(out, result.text);
       if (result.ok) toast("Diagnostic complete.", "ok");
       else toast("Diagnostic failed: " + esc(result.errorCode || "unknown"), "danger");

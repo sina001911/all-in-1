@@ -407,6 +407,54 @@ The same honesty rules as D24/D26 apply, unchanged:
   and the ledger cannot disagree; a paid agent turn charges the ledger exactly
   once, even across a pause and resume.
 
+## D28 — Account a Settled Agent Turn the Gateway Reported as Failed or Empty
+
+The engine commits a turn's cost to the budget ledger on ANY resolve —
+including a result the provider returned as `ok:false` and a result with
+neither text nor tool calls. The agent loop captured the accounting only
+AFTER its ok/empty gate, so such a turn charged the ledger and was then
+dropped before a `UsageRecord` was written: the usage totals silently excluded
+spend the ledger had already charged, the exact invariant D27 exists to hold,
+on a path D27 never covered. The workflow path always recorded these as
+`outcome: failed`.
+
+The fix is a statement move, not a new path: the turn's settlement is captured
+before the gate decides its fate, so a charged turn always reaches the usage
+store. The label follows the gateway's verdict through an optional
+`AccountedTurn.failed` field, so the recording layer marks the record honestly
+instead of assuming a settled turn succeeded. The field is optional, so every
+existing producer of a plain `TurnSettlement` is unchanged.
+
+Latent under the frozen defaults: both shipped adapters only ever resolve
+`ok:true`, so no shipped path produced a charged failed turn — the defect was
+one registered adapter away.
+
+## D29 — The Diagnostic Stream Seam Was Never Connected
+
+D16 added `streaming` and `runId` to `DiagnosticRequest` and wired the
+main-process bridge. D17 hardened it. D18 built the renderer that polls it —
+and the one IPC handler between them forwarded neither field, so the whole
+chain was inert: `facade.runDiagnostic` always saw `streaming === undefined`,
+`workflowStreamBridge.start()` never ran, and the "stream events" checkbox
+polled a bridge key that could not exist. The D18 test was pure string
+matching, so it passed while the feature was dead. The renderer's stable
+`runId` — the only input D26's resume contract can act on — was also dropped,
+so the resume path was unreachable from the desktop too.
+
+The mapping, not the registration, is the seam. It is extracted into
+`desktop/src/ipc-requests.ts` (`buildDiagnosticRequest`) — pure, throwing on
+invalid input exactly as the inline handler did — so main.ts stays a thin
+registration layer and the boundary is exercised in CI without a window:
+`runId` and `streaming` now reach the facade, and only an explicit `true` opts
+into streaming (never defaulted).
+
+The unmasking this fix reveals is also closed: now that the renderer's `runId`
+lands, its sticky `diagRunId` would otherwise reuse a COMPLETED run's id, so
+the next run starts on a used key — usage records append under colliding ids
+while the run record is replaced, and one Runs row silently reports two runs'
+spend. The id is retained only while the run is still resumable
+(`pausedForHuman`), which is what reuse exists for under D26.
+
 
 ```sh
 npm install        # isolated to this directory; runtime deps remain ZERO

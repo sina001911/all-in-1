@@ -22,19 +22,12 @@ import { DesktopFacade } from "./facade.ts";
 import type { DesktopStack } from "./desktop-stack.ts";
 import { ElectronSafeStorageCredentialProvider } from "./credentials/electron-safe-storage.ts";
 import { applyPickedRoot } from "./workspace/pick.ts";
-import { SAFETY_MODES, type SafetyMode } from "../../src/safety/guard.ts";
-import { MODEL_ROLES, type ModelRole } from "../../src/registry/roles.ts";
+// D29: the diagnostic request mapping lives outside the Electron boundary so
+// the seam that forwards `runId`/`streaming` to the facade is exercised in CI.
+import { buildDiagnosticRequest, isSafetyMode } from "./ipc-requests.ts";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const isSelfTest = process.argv.includes("--selftest");
-
-function isSafetyMode(v: unknown): v is SafetyMode {
-  return typeof v === "string" && (SAFETY_MODES as readonly string[]).includes(v);
-}
-
-function isModelRole(v: unknown): v is ModelRole {
-  return typeof v === "string" && (MODEL_ROLES as readonly string[]).includes(v);
-}
 
 function buildStack(): DesktopStack {
   const baseDir = app.getPath("userData");
@@ -58,23 +51,12 @@ function registerHandlers(facade: DesktopFacade): void {
   ipcMain.handle("all-in-1:run:usage", (_e, runId: unknown) =>
     typeof runId === "string" ? facade.getRunUsage(runId) : facade.listRunUsage(),
   );
-  ipcMain.handle("all-in-1:run:diagnostic", (_e, raw: unknown) => {
-    if (!raw || typeof raw !== "object") throw new Error("Invalid diagnostic request");
-    const req = raw as Record<string, unknown>;
-    if (!isSafetyMode(req.mode)) throw new Error(`Invalid mode: ${String(req.mode)}`);
-    if (typeof req.subject !== "string") throw new Error("subject must be a string");
-    const steps = Array.isArray(req.steps) && req.steps.every(isModelRole)
-      ? (req.steps as ModelRole[])
-      : undefined;
-    return facade.runDiagnostic({
-      mode: req.mode,
-      subject: req.subject,
-      steps,
-      auto: req.auto === true,
-      plan: typeof req.plan === "boolean" ? req.plan : undefined,
-      timeoutMs: typeof req.timeoutMs === "number" ? req.timeoutMs : undefined,
-    });
-  });
+  ipcMain.handle("all-in-1:run:diagnostic", (_e, raw: unknown) =>
+    // D29: the mapping (not the registration) is the seam. `runId` and
+    // `streaming` reach the facade from here, or the D16 bridge and the D18
+    // progress UI stay unreachable.
+    facade.runDiagnostic(buildDiagnosticRequest(raw)),
+  );
   ipcMain.handle("all-in-1:run:cancel", (_e, runId: unknown) =>
     typeof runId === "string" ? facade.cancelRun(runId) : false,
   );
