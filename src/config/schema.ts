@@ -7,11 +7,15 @@ import type { SafetyMode } from "../safety/guard.ts";
 import type { HostPolicy } from "../safety/hosts.ts";
 
 export interface VisualConfig {
-  readonly mainCoder: {
-    readonly provider: "s1";
-    readonly model: "Atria-Dawn-Preview";
-    readonly fixed: true;
-  };
+  /**
+   * The main coding model binding. `null` when no external coder (e.g. Atria)
+   * is configured — AI1 still works through the built-in local agent. Making
+   * this nullable is the optionality guarantee: the system never depends on
+   * Atria being present, enabled, or reachable.
+   */
+  readonly mainCoder:
+    | { readonly provider: string; readonly model: string; readonly fixed: boolean }
+    | null;
   readonly roles: Record<string, { readonly policy: CostPolicy }>;
   readonly cost: {
     readonly spendBudgetUsd: number;
@@ -55,14 +59,19 @@ export interface VisualConfig {
 }
 
 export const FROZEN_DEFAULTS: VisualConfig = {
-  mainCoder: { provider: "s1", model: "Atria-Dawn-Preview", fixed: true },
+  /**
+   * No default main-coder binding. The user may configure one explicitly (e.g.
+   * Atria-Dawn-Preview / s1) through settings or CLI flags; until then the
+   * system falls back to the built-in local agent for all coding work.
+   */
+  mainCoder: null,
   roles: {
-    VISION: { policy: "FREE_ONLY" },
-    VISUAL_QA: { policy: "FREE_ONLY" },
+    VISION: { policy: "PREFERRED_FREE" },
+    VISUAL_QA: { policy: "PREFERRED_FREE" },
     CODE_REVIEWER: { policy: "PREFERRED_FREE" },
     DEEP_REASONING: { policy: "PREFERRED_FREE" },
-    CODING_ASSISTANT: { policy: "FREE_ONLY" },
-    FAST_TASK: { policy: "FREE_ONLY" },
+    CODING_ASSISTANT: { policy: "PREFERRED_FREE" },
+    FAST_TASK: { policy: "PREFERRED_FREE" },
   },
   cost: {
     spendBudgetUsd: 0,
@@ -78,7 +87,7 @@ export const FROZEN_DEFAULTS: VisualConfig = {
   browser: { hostPolicy: "localhost-only" },
   media: {
     enabled: false,
-    policy: "FREE_ONLY",
+    policy: "PREFERRED_FREE",
     providers: {},
     budget: {
       maxMediaGenerations: 0,

@@ -49,7 +49,7 @@ export function buildVisionStack(
     registry: models,
     approvals: new ApprovalStore(),
     budget: new BudgetLedger(opts.budgetUsd ?? 0),
-    policy: "FREE_ONLY",
+    policy: "PREFERRED_FREE",
   });
 
   const providers = new VisionProviderRegistry();

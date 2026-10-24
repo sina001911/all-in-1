@@ -28,6 +28,7 @@ export const PROVIDER_PROTOCOLS = [
   "openrouter",
   "local",
   "fake",
+  "anthropic",
 ] as const;
 export type ProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number] | (string & {});
 

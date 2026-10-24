@@ -9,7 +9,7 @@
  * The intended target is a LOCAL OpenAI-compatible server (Ollama, LM Studio,
  * vLLM) on loopback. Loopback egress is permitted by the default policy, a
  * local server costs nothing, needs no credential, and so satisfies the frozen
- * FREE_ONLY policy and the zero budget at once. A REMOTE host works too, but
+ * PREFERRED_FREE policy and the zero budget at once. A REMOTE host works too, but
  * only after the user has allowlisted it AND granted a budget — the frozen
  * defaults remain exactly what they are.
  *
@@ -21,6 +21,7 @@ import { ModelCatalog } from "../models/catalog.ts";
 import type { ModelDescriptor, Locality, ModelStatus } from "../models/types.ts";
 import { AdapterRegistry as ProviderAdapterRegistry } from "./adapter-registry.ts";
 import { OpenAICompatibleAdapter } from "./openai-compatible-adapter.ts";
+import { AnthropicCompatibleAdapter } from "./fcc-adapter.ts";
 
 /** One model a user declared at a provider. */
 export interface UserProvidedModel {
@@ -55,6 +56,13 @@ export interface UserProvidedProvider {
   readonly displayName?: string;
   /** Base URL, e.g. `http://127.0.0.1:11434/v1`. */
   readonly endpoint: string;
+  /**
+   * Wire protocol. Defaults to `openai-compatible` for backward compatibility
+   * with providers registered before the field existed. Set to `anthropic`
+   * for an Anthropic Messages-compatible gateway (the FCC local gateway speaks
+   * POST /messages, not POST /chat/completions).
+   */
+  readonly protocol?: string;
   /**
    * Environment-variable NAME of the key, or null/omitted for a keyless local
    * server. A VALUE never enters this structure, the settings file, or the UI.
@@ -132,7 +140,8 @@ export function registerUserProvider(
   }
 
   const apiKeyEnv = provider.apiKeyEnv ? String(provider.apiKeyEnv).trim() : null;
-  const adapter = new OpenAICompatibleAdapter({
+  const protocol = String(provider.protocol ?? "openai-compatible").trim();
+  const baseOptions = {
     id,
     displayName: String(provider.displayName ?? id).slice(0, 80) || id,
     endpoint: endpoint.replace(/\/+$/, ""),
@@ -145,7 +154,14 @@ export function registerUserProvider(
         .filter((m) => m.costPer1MUsd)
         .map((m) => [String(m.id), { input: m.costPer1MUsd!.input, output: m.costPer1MUsd!.output }]),
     ),
-  });
+  };
+  // The protocol selects the adapter that knows how to speak to this endpoint.
+  // An `anthropic` gateway expects POST /messages with a `system` field and
+  // `content[]` blocks; an `openai-compatible` one expects POST /chat/completions.
+  const adapter =
+    protocol === "anthropic"
+      ? new AnthropicCompatibleAdapter(baseOptions)
+      : new OpenAICompatibleAdapter(baseOptions);
   adapters.register(adapter);
 
   const modelIds: string[] = [];
@@ -160,7 +176,7 @@ export function registerUserProvider(
       warnings.push(`provider "${id}": model "${modelId}" is already registered; skipping`);
       continue;
     }
-    const free = !m.costPer1MUsd;
+    const free = !m.costPer1MUsd || (m.costPer1MUsd.input === 0 && m.costPer1MUsd.output === 0);
     catalog.register({
       id: composite,
       provider: id,
@@ -193,6 +209,105 @@ export function registerUserProvider(
   }
 
   return { providerId: id, adapterId: id, modelIds, warnings };
+}
+
+/**
+ * Discover the models a gateway actually exposes (D7 "dynamic model list").
+ *
+ * The FCC local gateway (and any OpenAI/Anthropic-compatible server) advertises
+ * its catalogue at `GET <endpoint>/models`. This fetches it and returns the
+ * model descriptors, so a provider registered with an empty model list can
+ * still surface every real model the gateway serves. The fetch is opt-in: it
+ * is only called when the UI asks to refresh, never at registration time, so
+ * the synchronous registration path stays deterministic and testable.
+ *
+ * Both wire shapes are accepted: OpenAI-compatible gateways return
+ * `{ data: [{ id, ... }, ...] }`; the Anthropic-compatible FCC gateway returns
+ * a bare array. A bare array is accepted only for the `anthropic` protocol.
+ */
+export async function discoverProviderModels(input: {
+  readonly endpoint: string;
+  readonly protocol?: string;
+  readonly apiKeyEnv?: string | null;
+  readonly timeoutMs?: number;
+  readonly maxModels?: number;
+}): Promise<{ readonly models: readonly UserProvidedModel[]; readonly warnings: readonly string[] }> {
+  const warnings: string[] = [];
+  const base = input.endpoint.replace(/\/+$/, "");
+  const protocol = String(input.protocol ?? "openai-compatible").trim();
+  const maxModels = Math.max(1, Math.min(input.maxModels ?? 500, 5_000));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 10_000);
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (input.apiKeyEnv) {
+      try {
+        const { resolveBearerToken } = await import("./secrets.ts");
+        const token = resolveBearerToken(input.apiKeyEnv);
+        headers.Authorization = `Bearer ${token}`;
+      } catch (e) {
+        warnings.push(`could not resolve key env ${input.apiKeyEnv}: ${e instanceof Error ? e.message : String(e)}`);
+        return { models: [], warnings };
+      }
+    }
+    const response = await fetch(`${base}/models`, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+    });
+    if (response.status < 200 || response.status >= 300) {
+      warnings.push(`model probe returned HTTP ${response.status}`);
+      return { models: [], warnings };
+    }
+    const parsed = (await response.json()) as unknown;
+    let rows: unknown[];
+    if (Array.isArray(parsed)) {
+      if (protocol !== "anthropic") {
+        warnings.push("gateway returned a bare array, which only the `anthropic` protocol accepts");
+        return { models: [], warnings };
+      }
+      rows = parsed;
+    } else if (parsed && typeof parsed === "object" && Array.isArray((parsed as { data?: unknown }).data)) {
+      rows = (parsed as { data: unknown[] }).data;
+    } else {
+      warnings.push("gateway returned JSON that is not a models list");
+      return { models: [], warnings };
+    }
+
+    const models: UserProvidedModel[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const id = typeof (row as { id?: unknown }).id === "string" ? (row as { id: string }).id.trim() : "";
+      if (id.length === 0 || seen.has(id)) continue;
+      seen.add(id);
+      const displayName = typeof (row as { display_name?: unknown }).display_name === "string"
+        ? (row as { display_name: string }).display_name
+        : id;
+      const inputModalities = Array.isArray((row as { inputModalities?: unknown }).inputModalities)
+        ? (row as { inputModalities: string[] }).inputModalities
+        : undefined;
+      models.push({
+        id,
+        displayName: displayName || id,
+        streaming: true,
+        tools: true,
+        capabilities: inputModalities && inputModalities.includes("image")
+          ? ["CODING", "CHAT", "VISION"]
+          : ["CODING", "CHAT"],
+      });
+      if (models.length >= maxModels) break;
+    }
+    if (seen.size > maxModels) {
+      warnings.push(`gateway exposes ${seen.size} models; only the first ${maxModels} were registered`);
+    }
+    return { models, warnings };
+  } catch (e) {
+    warnings.push(`model probe failed: ${e instanceof Error ? e.message : String(e)}`);
+    return { models: [], warnings };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Loopback literal check, kept free of any node import so it is testable anywhere. */

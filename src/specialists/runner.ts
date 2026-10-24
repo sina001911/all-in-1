@@ -107,16 +107,20 @@ export class SpecialistRunner {
       );
     }
 
-    // D25: what this invocation actually consumed, straight off the settled
+    // D25/D30: what this invocation actually consumed, straight off the settled
     // outcome. `committedUsd` is the same number the budget ledger committed.
+    // The token counts ride on the result itself (D30), so a buffered turn —
+    // which never emits a usage frame into a stream — is accounted as faithfully
+    // as a streamed one. The D25 stream capture stays as a fallback for any
+    // adapter that reports usage only through the sink.
     const accounting = {
       modelId: outcome.result.modelId,
       adapterId: outcome.adapterId,
       capability,
       committedUsd: Math.max(0, outcome.committedUsd),
       latencyMs: outcome.result.latencyMs,
-      promptTokens,
-      completionTokens,
+      promptTokens: outcome.result.promptTokens ?? promptTokens,
+      completionTokens: outcome.result.completionTokens ?? completionTokens,
     };
 
     // 4. Validate the structured output before it reaches a consumer.

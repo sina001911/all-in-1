@@ -42,8 +42,16 @@ const api = {
   // D4 agent
   listAgentTools: (mode) => ipcRenderer.invoke("all-in-1:agent:tools", mode),
   runAgent: (request) => ipcRenderer.invoke("all-in-1:agent:run", request),
+  // Compare: one prompt against N selected models. The payload is exactly
+  // what buildManyRequest validates; nothing else crosses this channel.
+  runMany: (input) => ipcRenderer.invoke("all-in-1:agent:many", input),
   getAgentStream: (runId, cursor) => ipcRenderer.invoke("all-in-1:agent:stream", { runId, cursor }),
   getWorkflowStream: (runId, cursor) => ipcRenderer.invoke("all-in-1:workflow:stream", { runId, cursor }),
+  // D34: collaborative path. Each participant's frames carry a `participantId`
+  // tag and are served by the same bridge, so the renderer routes them per card.
+  runCollab: (request) => ipcRenderer.invoke("all-in-1:collab:run", request),
+  // D34: collab stream events are served by the shared workflow bridge channel.
+  // The renderer uses getWorkflowStream directly; no separate preload entry needed.
   // D5 read-only views
   listModels: () => ipcRenderer.invoke("all-in-1:models:list"),
   getSelectionPosture: () => ipcRenderer.invoke("all-in-1:models:posture"),
@@ -52,6 +60,8 @@ const api = {
   // D8: why a registered provider was skipped at startup.
   getProviderWarnings: () => ipcRenderer.invoke("all-in-1:providers:warnings"),
   validateProviderConfig: (provider) => ipcRenderer.invoke("all-in-1:providers:test", provider),
+  // D7: fetch the catalogue a gateway advertises, without registering anything.
+  discoverModels: (input) => ipcRenderer.invoke("all-in-1:providers:discover", input),
   // D6: asks MAIN to let the user pick a folder. This takes no path argument —
   // the renderer can only request the dialog, never name a directory.
   pickWorkspaceRoot: () => ipcRenderer.invoke("all-in-1:workspace:pick"),

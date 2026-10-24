@@ -46,8 +46,15 @@ export const IPC_CHANNELS = [
   "all-in-1:agent:tools",
   "all-in-1:agent:run",
   "all-in-1:agent:stream",
+  // Compare: N independent gated agent runs for one prompt, bounded
+  // concurrency, per-model isolation. Each run is a full 7-gate execution
+  // with its own runId (cmp-<base>-<i>) — no path around the pipeline.
+  "all-in-1:agent:many",
   // D16: workflow stream mirrors agent bridge contract with a distinct run namespace.
+  // D34: collab reuses this channel for participant stream frames (via getWorkflowStream).
   "all-in-1:workflow:stream",
+  // D34: Collaborate — configurable multi-model orchestration (run + stream reuse).
+  "all-in-1:collab:run",
   // D5 read-only model/provider and workspace views
   "all-in-1:models:list",
   "all-in-1:models:posture",
@@ -62,6 +69,8 @@ export const IPC_CHANNELS = [
   "all-in-1:providers:warnings",
   // D21: explicit provider-config validation before save.
   "all-in-1:providers:test",
+  // D7: pull the catalogue a gateway advertises, without registering anything.
+  "all-in-1:providers:discover",
   "all-in-1:workspace:pick",
 ] as const;
 

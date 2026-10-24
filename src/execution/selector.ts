@@ -68,7 +68,7 @@ export interface SelectorCheck {
 }
 
 function projectPolicy(policy: SelectorOptions["policy"]): CostPolicy {
-  if (!policy) return "FREE_ONLY";
+  if (!policy) return "PREFERRED_FREE";
   if (typeof policy === "string") {
     // Already a frozen router policy.
     if (policy === "FREE_ONLY" || policy === "PREFERRED_FREE" || policy === "BALANCED" || policy === "PREMIUM_ALLOWED" || policy === "MANUAL") {
@@ -76,7 +76,7 @@ function projectPolicy(policy: SelectorOptions["policy"]): CostPolicy {
     }
     return toRouterPolicy(policy as CapabilityCostPolicy);
   }
-  return "FREE_ONLY";
+  return "PREFERRED_FREE";
 }
 
 function classifyCost(model: ModelDescriptor): { pricing: Pricing; costClass: CostClass } {

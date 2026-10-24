@@ -266,15 +266,24 @@
   var state = {
     theme: "system",
     settings: null,
-    view: "agent",
+    view: "chat",
     mode: "INSPECT",
+    // Kept ONLY while the last run is paused for the human (the D26 resume
+    // flow). Every other time it is "" and the next run gets a fresh id.
     runId: "",
+    activeRunId: "", // the run in flight right now, live or not
     busy: false,
     lastResult: null,
+    lastRequestedModel: null, // the provider/model the human picked for it
     selectedRunId: null,
     runs: [],
     pending: [],
     firstRunDismissed: false,
+    lang: "en",
+    liveStream: null,
+    modelCatalog: [],
+    modelSearch: "",
+    modelCostFilter: "all",
   };
 
   var MODES = ["INSPECT", "SUGGEST", "BUILD"];
@@ -340,11 +349,38 @@
       if (item.getAttribute("data-view") === name) item.setAttribute("aria-current", "page");
       else item.removeAttribute("aria-current");
     }
-    MODES.concat(["agent", "runs", "tools", "approvals", "audit", "models", "workspace", "settings"]).forEach(function (v) {
+    var allViews = ["chat", "compare", "collab", "runs", "tools", "approvals", "audit", "models", "workspace", "settings"];
+    allViews.forEach(function (v) {
       var view = el("view-" + v);
       if (view) view.classList.toggle("active", v === name);
     });
+    // The chat-head segment (Single / Compare / Collaborate) and the composer's
+    // execution-type select mirror each other and the view; all three end in
+    // the same state after any one of them is used.
+    syncExecTypeControls(name);
     refreshView(name).catch(function () {});
+  }
+
+  var EXEC_SEG = { chat: "mode-INSPECT", compare: "mode-COMPARE", collab: "mode-COLLAB" };
+
+  function syncExecTypeControls(viewName) {
+    var execSel = el("exec-type");
+    if (execSel) {
+      var inv = viewName === "chat" ? "single" : viewName === "compare" ? "compare" : viewName === "collab" ? "collab" : null;
+      if (inv) execSel.value = inv;
+    }
+    for (var v in EXEC_SEG) {
+      var btn = el(EXEC_SEG[v]);
+      if (btn) btn.setAttribute("aria-pressed", v === viewName ? "true" : "false");
+    }
+  }
+
+  function selectExecType(kind) {
+    var sel = el("exec-type");
+    if (sel) sel.value = kind;
+    if (kind === "single") showView("chat");
+    else if (kind === "compare") showView("compare");
+    else if (kind === "collab") showView("collab");
   }
 
   /* ==================================================================
@@ -401,11 +437,23 @@
       host.appendChild(
         EmptyState("No turns yet — send a prompt above and the model's reasoning and tool activity appear here."),
       );
-      return;
     }
     history.forEach(function (ev) {
       host.appendChild(renderTurn(ev));
     });
+    // D29/D33: the engine reports which model ACTUALLY executed. If it is not
+    // the one the human requested, say so — a substitute is never silent.
+    if (result && result.model) {
+      var requested = state.lastRequestedModel;
+      var mismatch = !!requested && result.model !== requested;
+      var row = h("div", { class: "row", style: "margin-bottom:var(--s2)" }, [
+        Badge("answered by " + result.model, mismatch ? "warn" : "ok"),
+      ]);
+      if (mismatch) {
+        row.appendChild(Badge("substituted — you requested " + requested, "warn"));
+      }
+      host.appendChild(row);
+    }
     host.scrollTop = host.scrollHeight;
   }
 
@@ -420,12 +468,845 @@
   }
 
   function syncAgentState() {
-    var host = el("agent-state");
-    clear(host);
-    host.appendChild(RunStatePill(state.lastResult));
+    // The chat view shows state through the transcript and the composer bar;
+    // there is no separate status pill in the new layout.
     var hint = el("agent-hint");
     if (hint && state.lastResult && state.lastResult.pausedForHuman) {
       text(hint, "Run again on the same run id to continue.");
+    }
+  }
+
+  function renderWelcome() {
+    var host = el("chat-welcome");
+    clear(host);
+    var suggestions = [
+      "Explain how a binary search tree works",
+      "Draft a README for a CLI tool",
+      "Review this function for bugs",
+      "Suggest 3 ways to improve this code",
+    ];
+    var wrap = h("div", { class: "welcome-hero" }, [
+      h("div", { class: "welcome-mark", text: "AI1" }),
+      h("h1", { text: "Ask anything" }),
+      h("p", { class: "muted", text: "Choose a model and how you want to work. Built-in local models work offline; add a provider for more." }),
+    ]);
+    host.appendChild(wrap);
+    var suggBox = h("div", { class: "welcome-suggestions" });
+    suggestions.forEach(function (s) {
+      suggBox.appendChild(
+        h("button", {
+          type: "button",
+          text: s,
+          onClick: function () {
+            var ta = el("agent-prompt");
+            if (ta) ta.value = s;
+            ta && ta.focus();
+          },
+        }),
+      );
+    });
+    host.appendChild(suggBox);
+  }
+
+  /**
+   * Model picker (the product's most important control). It keeps the native
+   * `#model-select` as the single source of truth — its `.value` is the exact
+   * `provider/modelId` the run path forwards to the engine — and layers a live
+   * search, an OPTIONAL cost filter, and a refresh affordance on top. The
+   * cost filter never removes the user's active pick silently: a pick that a
+   * filter would hide is pinned as a "(current)" option so the selection the
+   * user made can only change if the user changes it.
+   */
+  async function populateModelSelect() {
+    state.modelSearch = "";
+    var search = el("model-search");
+    if (search) search.value = "";
+    state.modelCostFilter = "all";
+    var filter = el("model-cost-filter");
+    if (filter) {
+      var btns = filter.querySelectorAll("button");
+      for (var i = 0; i < btns.length; i++) {
+        btns[i].setAttribute("aria-pressed", btns[i].getAttribute("data-cost") === "all" ? "true" : "false");
+      }
+    }
+    await refreshModelCatalog();
+  }
+
+  /** Re-pull the live catalogue and provider-connection state, then re-render. */
+  async function refreshModelCatalog() {
+    var sel = el("model-select");
+    if (sel) sel.disabled = true;
+    try {
+      var models = await api.listModels();
+      state.modelCatalog = (models || []).filter(function (m) {
+        return m.enabled === true && m.available === true;
+      });
+    } catch (_e) {
+      state.modelCatalog = [];
+    }
+    if (sel) sel.disabled = false;
+    renderModelOptions();
+    loadModelStatus();
+  }
+
+  function renderModelOptions() {
+    var sel = el("model-select");
+    if (!sel) return;
+    var current = sel.value;
+    clear(sel);
+    sel.appendChild(h("option", { value: "", text: "Select a model…" }));
+    var q = state.modelSearch.trim().toLowerCase();
+    var costFilter = state.modelCostFilter;
+    var currentKept = false;
+    for (var i = 0; i < state.modelCatalog.length; i++) {
+      var m = state.modelCatalog[i];
+      var isCurrent = m.id === current;
+      if (isCurrent) {
+        // The active pick is always shown, even when a filter would hide it.
+        addModelOption(sel, m);
+        currentKept = true;
+        continue;
+      }
+      var haystack = (m.displayName || m.id) + "  " + m.id + "  " + m.provider;
+      var matchesSearch = q === "" || haystack.toLowerCase().indexOf(q) !== -1;
+      var matchesCost = costFilter === "all" || m.costClass === costFilter;
+      if (matchesSearch && matchesCost) addModelOption(sel, m);
+    }
+    if (current && !currentKept) {
+      sel.appendChild(h("option", { value: current, text: "(current) " + current }));
+      sel.value = current;
+    }
+  }
+
+  function addModelOption(sel, m) {
+    // D32: the cost label is part of the option text so the human can tell a
+    // free model from a paid one before selecting it. UNKNOWN cost is never
+    // shown as free — it is labelled as unknown and the engine will ask for
+    // approval before any paid call.
+    var costLabel = m.costClass === "FREE" ? "free"
+      : m.costClass === "PAID" ? "paid"
+      : "unknown-cost";
+    sel.appendChild(h("option", {
+      value: m.id,
+      text: m.displayName + "  [" + costLabel + "]  " + m.id,
+    }));
+  }
+
+  /**
+   * The honest connection line: how many saved providers actually registered
+   * into the engine, and the frozen selection posture. Nothing here is
+   * invented — it is read straight from the engine's registration state.
+   */
+  async function loadModelStatus() {
+    var host = el("model-status");
+    if (!host) return;
+    clear(host);
+    var posture = null;
+    var providers = [];
+    try { posture = await api.getSelectionPosture(); } catch (_e) { posture = null; }
+    try { providers = await api.listModelProviders(); } catch (_e) { providers = []; }
+    if (!Array.isArray(providers)) providers = [];
+    var total = providers.length;
+    var registered = 0;
+    for (var i = 0; i < total; i++) if (providers[i] && providers[i].registered) registered++;
+    if (total === 0) {
+      host.appendChild(h("span", { text: "No providers registered — built-in local models only. " }));
+    } else if (registered === 0) {
+      host.appendChild(h("span", { class: "st-warn", text: total + " provider(s) saved but none connected — " }));
+    } else {
+      host.appendChild(h("span", { class: "st-ok", text: total + " provider(s), " + registered + " connected — " }));
+    }
+    if (posture) {
+      host.appendChild(h("span", {
+        text: "egress " + posture.egress + " · budget " + posture.budgetUsd + " USD · policy " + posture.policy,
+      }));
+    }
+  }
+
+  /*
+   * Compare (multi-model fan-out through the facade's runMany). The state of a
+   * live batch lives in `cmpBatch`: null means nothing is running, so the view
+   * loader may safely rebuild; non-null means panels and timers are bound to
+   * it and must survive navigation.
+   */
+  var cmpBatch = null;
+
+  async function loadCompare() {
+    if (cmpBatch) return; // a batch is live — do not wipe its panels or timers
+    var host = el("cmp-models");
+    // Remember the human's checked set so leaving and coming back does not
+    // silently erase a half-prepared comparison.
+    var keep = {};
+    host.querySelectorAll("input[type=checkbox]").forEach(function (cb) {
+      if (cb.checked) keep[cb.value] = true;
+    });
+    clear(host);
+    host.appendChild(SkeletonRow(2));
+    var models = await api.listModels();
+    clear(host);
+    (models || []).forEach(function (m) {
+      if (m.enabled !== true || m.available !== true) return;
+      var cb = h("input", {
+        id: "cmp-model-" + m.id.replace("/", "-"),
+        type: "checkbox",
+        value: m.id,
+      });
+      if (keep[m.id]) cb.checked = true;
+      var label = h("label", { class: "check" }, [
+        cb,
+        document.createTextNode(" " + m.displayName + "  " + m.id),
+      ]);
+      host.appendChild(h("div", null, [label]));
+    });
+    var results = el("cmp-results");
+    clear(results);
+  }
+
+  function cmpDisplayName(modelId) {
+    var known = null;
+    (state.modelCatalog || []).forEach(function (m) {
+      if (m.id === modelId) known = m;
+    });
+    return known ? known.displayName : modelId;
+  }
+
+  function cmpSlotPanel(modelId, index, runId, live) {
+    var bodyKids = [];
+    if (live) {
+      // The live preview the per-slot stream poll writes into; the final
+      // answer replaces the whole body, so it is never a duplicate tail.
+      bodyKids.push(h("pre", { class: "code", id: "cmp-live-" + index, style: "white-space:pre-wrap" }, []));
+    } else {
+      bodyKids.push(SkeletonRow(1));
+    }
+    var panel = h("div", { class: "card card-pad cmp-slot", id: "cmp-slot-" + index }, [
+      h("div", { class: "row" }, [
+        h("div", null, [
+          h("h3", { text: cmpDisplayName(modelId) }),
+          h("div", { class: "mono faint", text: modelId }),
+        ]),
+        h("div", { class: "grow" }),
+        h("span", { id: "cmp-status-" + index }, [Badge("running", "warn")]),
+      ]),
+      h("div", { class: "turn-body", id: "cmp-body-" + index, style: "margin-top:var(--s2)" }, bodyKids),
+      h("div", { class: "row", id: "cmp-foot-" + index, style: "margin-top:var(--s2)" }, [
+        h("span", { class: "mono faint", text: "run " + runId }),
+        h("div", { class: "grow" }),
+        Button("Cancel", {
+          small: true,
+          variant: "danger",
+          onClick: function () {
+            cancelCompareSlot(runId);
+          },
+        }),
+      ]),
+    ]);
+    return panel;
+  }
+
+  async function cancelCompareSlot(runId) {
+    try {
+      var ok = await api.cancelRun(runId);
+      toast("Cancelled " + runId + " — the other models keep running.", "warn");
+      if (!ok) toast("Nothing to cancel on " + runId + " (already settled).", "info");
+      await loadApprovals();
+    } catch (e) {
+      toast("Cancel failed: " + esc(e), "danger");
+    }
+  }
+
+  async function cancelCompareAll() {
+    if (!cmpBatch) return;
+    for (var i = 0; i < cmpBatch.runIds.length; i++) {
+      try { await api.cancelRun(cmpBatch.runIds[i]); } catch (_e) { /* the run promise is authoritative */ }
+    }
+    toast("All comparison slots cancelled; no pending approval was auto-approved.", "warn");
+    await loadApprovals();
+  }
+
+  function stopComparePolling() {
+    if (cmpBatch && cmpBatch.timers) {
+      cmpBatch.timers.forEach(function (t) { clearInterval(t); });
+      cmpBatch.timers = [];
+    }
+  }
+
+  async function pollCompareStreams() {
+    if (!cmpBatch) return;
+    var batch = cmpBatch;
+    for (var i = 0; i < batch.runIds.length; i++) {
+      var runId = batch.runIds[i];
+      try {
+        var env = await api.getAgentStream(runId, batch.cursors[runId] || 0);
+        if (!env) continue;
+        for (var j = 0; j < env.events.length; j++) {
+          var ev = env.events[j];
+          var live = el("cmp-live-" + i);
+          if (!live) continue;
+          if (ev.kind === "text") {
+            batch.streamText[i] = (batch.streamText[i] || "") + ev.text;
+            live.textContent = batch.streamText[i];
+          }
+        }
+        batch.cursors[runId] = env.nextIndex;
+      } catch (_e) {
+        // The runMany promise is the final word; polling must never mask it.
+      }
+    }
+  }
+
+  function renderCompareSlot(i, slot) {
+    var statusEl = el("cmp-status-" + i);
+    var body = el("cmp-body-" + i);
+    var foot = el("cmp-foot-" + i);
+    if (statusEl) {
+      clear(statusEl);
+      if (slot.ok && !slot.pausedForHuman) statusEl.appendChild(Badge("answered", "ok"));
+      else if (slot.pausedForHuman) statusEl.appendChild(Badge("paused for you", "warn"));
+      else if (slot.escalated) statusEl.appendChild(Badge("escalated", "warn"));
+      else statusEl.appendChild(Badge(slot.error ? "failed" : "no answer", "danger"));
+    }
+    if (body) {
+      clear(body);
+      if (slot.ok && slot.text) {
+        body.appendChild(mono(slot.text));
+      } else if (slot.error) {
+        body.appendChild(h("div", { class: "muted", text: slot.error.code + ": " + slot.error.message }));
+      } else {
+        body.appendChild(EmptyState("No text answer."));
+      }
+    }
+    if (foot) {
+      clear(foot);
+      foot.appendChild(h("span", { class: "mono faint", text: "run " + slot.runId }));
+      foot.appendChild(h("div", { class: "grow" }));
+      if (slot.executedModel) {
+        var mismatch = slot.executedModel !== slot.requestedModel;
+        foot.appendChild(
+          h("span", {
+            class: mismatch ? "st-warn" : "st-ok",
+            text: "executed " + slot.executedModel + (mismatch ? "  (substituted — requested " + slot.requestedModel + ")" : ""),
+          }),
+        );
+      }
+    }
+  }
+
+  async function startCompare() {
+    if (cmpBatch) return; // a batch is already live — refuse a duplicate request
+    var prompt = el("cmp-prompt").value;
+    if (!prompt || !prompt.trim()) {
+      toast("Type a prompt first.", "warn");
+      return;
+    }
+    var checkboxes = el("cmp-models").querySelectorAll("input[type=checkbox]:checked");
+    var modelIds = [];
+    var seen = {};
+    for (var i = 0; i < checkboxes.length; i++) {
+      var v = checkboxes[i].value;
+      if (!v || seen[v]) continue; // a duplicate selection is one answer asked twice
+      seen[v] = true;
+      modelIds.push(v);
+    }
+    var results = el("cmp-results");
+    clear(results);
+    if (modelIds.length === 0) {
+      results.appendChild(EmptyState("Select at least one model above to prepare a comparison."));
+      return;
+    }
+
+    var batchId = "cmp-" + Date.now().toString(36);
+    var streaming = el("cmp-stream").checked;
+    var concurrency = parseInt(el("cmp-concurrency").value, 10);
+    var timeout = parseInt(el("cmp-timeout").value, 10);
+
+    var runIds = modelIds.map(function (id, idx) {
+      return batchId + "-" + idx;
+    });
+    modelIds.forEach(function (id, idx) {
+      results.appendChild(cmpSlotPanel(id, idx, runIds[idx], streaming));
+    });
+
+    cmpBatch = { runIds: runIds, timers: [], cursors: {}, streamText: {} };
+    var startBtn = el("compare-start");
+    startBtn.disabled = true;
+    var head = h("div", { class: "row card card-pad" }, [
+      h("h3", { text: "Running the same prompt on " + modelIds.length + " model(s)…" }),
+      h("div", { class: "grow" }),
+      Button("Cancel all", { small: true, variant: "danger", onClick: cancelCompareAll }),
+    ]);
+    results.insertBefore(head, results.firstChild);
+    if (streaming) {
+      cmpBatch.timers.push(setInterval(pollCompareStreams, 400));
+    }
+
+    var payload = {
+      batchId: batchId,
+      prompt: prompt,
+      modelIds: modelIds,
+      mode: state.mode,
+      streaming: streaming,
+    };
+    if (concurrency > 0) payload.concurrency = concurrency;
+    if (timeout > 0) payload.timeoutMs = timeout;
+
+    try {
+      var res = await api.runMany(payload);
+      (res || []).forEach(function (slot, idx) { renderCompareSlot(idx, slot); });
+      var okCount = (res || []).filter(function (s) { return s.ok && !s.pausedForHuman; }).length;
+      if (res && res.length > 0 && okCount === res.length) toast("Comparison complete — every model answered.", "ok");
+      else if (okCount === 0) toast("Every comparison slot failed or paused.", "danger");
+      else toast("Comparison done: " + okCount + " of " + res.length + " answered.", "warn");
+    } catch (e) {
+      modelIds.forEach(function (id, idx) {
+        renderCompareSlot(idx, {
+          requestedModel: id,
+          ok: false,
+          escalated: false,
+          pausedForHuman: false,
+          runId: runIds[idx],
+          error: { code: "COMPARE_FAILED", message: String(e) },
+        });
+      });
+      toast("Comparison failed: " + esc(e), "danger");
+    } finally {
+      stopComparePolling();
+      cmpBatch = null;
+      startBtn.disabled = false;
+      if (head.parentNode) head.remove();
+      await loadRuns();
+      await refreshStatus();
+    }
+  }
+
+  /**
+   * Collaborate: configurable multi-model orchestration (D34).
+   *
+   * The human names the goal, picks every participant, the strategy, and an
+   * optional synthesis model. Each participant is an independent, fully-gated
+   * specialist run; the orchestrator reconciles their structured outputs.
+   * Streaming reuses the workflow stream channel, frames tagged with
+   * participantId so progressive text routes to the right card.
+   */
+  var collabRunId = null;
+  var collabBusy = false;
+  var collabStreamTimer = null;
+  var collabStreamCursor = 0;
+
+  function addCollabParticipant() {
+    var host = el("collab-participants");
+    if (!host) return;
+    var row = h("div", { class: "collab-participant-row", role: "group", "aria-label": "Participant" }, [
+      h("label", { class: "field" }, [
+        h("span", { text: "provider", "data-en": "provider", "data-fa": "\u0627\u0631\u0627\u0626\u0647\u200c\u062f\u0647\u0646\u062f\u0647" }),
+        h("input", { class: "input", type: "text", value: "local", "data-collab": "provider", "aria-label": "Provider" }),
+      ]),
+      h("label", { class: "field" }, [
+        h("span", { text: "model", "data-en": "model", "data-fa": "\u0645\u062f\u0644" }),
+        h("input", { class: "input", type: "text", value: "agent", "data-collab": "model", "aria-label": "Model" }),
+      ]),
+      h("label", { class: "field" }, [
+        h("span", { text: "role", "data-en": "role", "data-fa": "\u0646\u0642\u0634" }),
+        h("select", { class: "select", "data-collab": "role", "aria-label": "Role" }, [
+          h("option", { value: "DEEP_REASONING" }, [h("span", { text: "deep reasoning", "data-en": "deep reasoning", "data-fa": "\u062a\u0641\u06a9\u0631 \u0639\u0645\u06cc\u0642" })]),
+          h("option", { value: "CODE_REVIEWER" }, [h("span", { text: "code reviewer", "data-en": "code reviewer", "data-fa": "\u0628\u0631\u0631\u0633\u06cc\u200c\u06a9\u0646\u0646\u062f\u0647 \u06a9\u062f" })]),
+          h("option", { value: "CODING_ASSISTANT" }, [h("span", { text: "coding assistant", "data-en": "coding assistant", "data-fa": "\u062f\u0633\u062a\u06cc\u0627\u0631 \u0628\u0631\u0646\u0627\u0645\u0647\u200c\u0646\u0648\u06cc\u0633\u06cc" })]),
+          h("option", { value: "FAST_TASK" }, [h("span", { text: "fast task", "data-en": "fast task", "data-fa": "\u0648\u0638\u06cc\u0641\u0647 \u0633\u0631\u06cc\u0639" })]),
+          h("option", { value: "VISION" }, [h("span", { text: "vision", "data-en": "vision", "data-fa": "\u0628\u06cc\u0646\u0627\u06cc\u06cc" })]),
+          h("option", { value: "VISUAL_QA" }, [h("span", { text: "visual qa", "data-en": "visual qa", "data-fa": "\u0628\u0627\u0632\u0631\u0633\u06cc \u0628\u0635\u0631\u06cc" })]),
+        ]),
+      ]),
+      h("label", { class: "field" }, [
+        h("span", { text: "its own task", "data-en": "its own task", "data-fa": "\u0648\u0638\u06cc\u0641\u0647 \u0627\u062e\u062a\u0635\u0627\u0635\u06cc" }),
+        h("input", { class: "input", type: "text", placeholder: "critique the design", "data-ph-en": "critique the design", "data-ph-fa": "\u0637\u0631\u0627\u062d\u06cc \u0631\u0627 \u0628\u0631\u0631\u0633\u06cc \u06a9\u0646\u06cc\u062f", "data-collab": "task", "aria-label": "Participant task" }),
+      ]),
+      h("button", {
+        type: "button",
+        class: "btn-remove",
+        title: "remove this participant",
+        "aria-label": "Remove participant",
+        on: {
+          click: function () {
+            var rows = host.querySelectorAll(".collab-participant-row");
+            if (rows.length > 2) host.removeChild(row);
+          },
+        },
+      }, [h("span", { text: "\u00d7", class: "faint" })]),
+    ]);
+    host.appendChild(row);
+  }
+
+  function readCollabParticipants() {
+    var host = el("collab-participants");
+    if (!host) return [];
+    var rows = host.querySelectorAll(".collab-participant-row");
+    var out = [];
+    for (var i = 0; i < rows.length; i++) {
+      out.push({
+        id: "p" + (i + 1),
+        provider: rows[i].querySelector('[data-collab="provider"]').value.trim(),
+        modelId: rows[i].querySelector('[data-collab="model"]').value.trim(),
+        role: rows[i].querySelector('[data-collab="role"]').value,
+        task: rows[i].querySelector('[data-collab="task"]').value.trim(),
+      });
+    }
+    return out;
+  }
+
+  async function loadCollab() {
+    var host = el("collab-participants");
+    if (host && host.querySelectorAll(".collab-participant-row").length === 0) {
+      addCollabParticipant();
+      addCollabParticipant();
+    }
+    var result = el("collab-result");
+    if (result) result.style.display = "none";
+    var cards = el("collab-participant-cards");
+    if (cards) cards.style.display = "none";
+    var dis = el("collab-disagreements");
+    if (dis) dis.style.display = "none";
+    // Load recent collaboration runs for quick resumption.
+    await loadRecentCollabs();
+  }
+
+  async function loadRecentCollabs() {
+    var host = el("collab-recent");
+    if (!host) return;
+    clear(host);
+    try {
+      var runs = await api.listRuns();
+      var collabs = [];
+      if (runs) {
+        for (var i = 0; i < runs.length; i++) {
+          if (runs[i].kind === "collab") collabs.push(runs[i]);
+        }
+      }
+      if (collabs.length === 0) {
+        host.appendChild(h("p", { class: "muted", text: "No previous collaborations." }));
+        return;
+      }
+      for (var j = 0; j < Math.min(collabs.length, 5); j++) {
+        var r = collabs[j];
+        var tone = r.status === "completed" ? "ok" : r.status === "cancelled" ? "warn" : "danger";
+        var row = h("div", { class: "row", style: "gap:var(--s2);align-items:center" }, [
+          Badge(r.status, tone),
+          h("span", { class: "mono", text: r.id }),
+          h("span", { class: "grow", text: r.subject || "" }),
+          Button(r.ok ? "Review" : "Retry", {
+            small: true,
+            variant: r.ok ? "ghost" : "primary",
+            onClick: function (id) {
+              return function () { loadPreviousCollab(id); };
+            }(r.id),
+          }),
+        ]);
+        host.appendChild(row);
+      }
+      if (collabs.length > 5) {
+        host.appendChild(h("p", { class: "muted faint", text: ("Showing 5 of " + collabs.length + " collaborations.") }));
+      }
+    } catch (_e) { /* degrade gracefully */ }
+  }
+
+  function stopCollabStreamPoll() {
+    if (collabStreamTimer !== null) {
+      clearInterval(collabStreamTimer);
+      collabStreamTimer = null;
+    }
+  }
+
+  function pushCollabStreamEvent(ev) {
+    if (!ev || !ev.participantId) return;
+    var cards = el("collab-participant-cards");
+    if (!cards) return;
+    var card = cards.querySelector('[data-participant="' + ev.participantId + '"]');
+    if (!card) return;
+    var live = card.querySelector(".collab-live");
+    if (!live) return;
+    if (ev.kind === "text") live.textContent += ev.text;
+    else if (ev.kind === "tool-call-delta") live.textContent += "\n[tool fragment]";
+    else if (ev.kind === "usage") live.textContent += "\n[usage " + (ev.promptTokens || 0) + "+" + (ev.completionTokens || 0) + "]";
+    else if (ev.kind === "finish") live.textContent += "\n[finish" + (ev.finishReason ? ": " + ev.finishReason : "") + "]";
+  }
+
+  async function pollCollabStream() {
+    if (!collabRunId) return;
+    try {
+      var env = await api.getWorkflowStream(collabRunId, collabStreamCursor);
+      if (!env) return;
+      for (var i = 0; i < env.events.length; i++) pushCollabStreamEvent(env.events[i]);
+      collabStreamCursor = env.nextIndex;
+      if (env.state !== "running") stopCollabStreamPoll();
+    } catch (_e) {
+      // The runCollab promise is the final word; polling must never mask it.
+    }
+  }
+
+  async function cancelCollab() {
+    if (!collabRunId) return;
+    await api.cancelRun(collabRunId);
+    toast("Collaboration cancelled; any budget reservation was released.", "warn");
+    collabRunId = null;
+    await loadRuns();
+  }
+
+  /**
+   * Load a previous collab run into the UI for review or resumption.
+   * Reads the persisted run record and its stream events, then reconstructs
+   * the participant cards and result display.
+   */
+  async function loadPreviousCollab(runId) {
+    var run = await api.getRun(runId);
+    if (!run) {
+      toast("Run not found.", "danger");
+      return;
+    }
+    if (run.kind !== "collab") {
+      toast("Not a collaboration run.", "warn");
+      return;
+    }
+    // Restore the task and basic fields.
+    var taskEl = el("collab-task");
+    if (taskEl) taskEl.value = run.subject || "";
+    // Load participant cards from the stream.
+    var cards = el("collab-participant-cards");
+    if (cards) {
+      clear(cards);
+      cards.style.display = "";
+      try {
+        var env = await api.getWorkflowStream(runId, 0);
+        if (env && env.events) {
+          // Replay events to reconstruct participant states.
+          var participantStates = {};
+          for (var i = 0; i < env.events.length; i++) {
+            var ev = env.events[i];
+            if (ev && ev.participantId) {
+              if (!participantStates[ev.participantId]) {
+                participantStates[ev.participantId] = { text: "", ok: true, error: null };
+              }
+              if (ev.kind === "text") participantStates[ev.participantId].text += ev.text;
+              else if (ev.kind === "finish" && ev.finishReason === "stop") {
+                // final frame
+              }
+            }
+          }
+          // Build cards from replayed state.
+          var ids = Object.keys(participantStates);
+          for (var j = 0; j < ids.length; j++) {
+            var pid = ids[j];
+            var st = participantStates[pid];
+            cards.appendChild(
+              h("div", { class: "collab-step done", "data-participant": pid, role: "listitem", "aria-label": "Participant " + pid }, [
+                h("div", { class: "collab-step-head" }, [
+                  h("span", { class: "collab-step-num", text: String(j + 1) }),
+                  h("div", { class: "collab-step-roles" }, [
+                    h("span", { class: "collab-step-role", text: pid }),
+                  ]),
+                  h("div", { class: "grow" }),
+                  Badge("settled", "ok"),
+                ]),
+                h("pre", { class: "code collab-live", "aria-live": "polite" }, [h("span", { text: st.text })]),
+              ]),
+            );
+          }
+        }
+      } catch (_e) { /* degrade gracefully */ }
+    }
+    // Show the result if available.
+    var resultCard = el("collab-result");
+    if (resultCard) {
+      resultCard.style.display = "";
+      var resultText = el("collab-result-text");
+      if (resultText) text(resultText, run.deliverable || "(no result available)");
+    }
+    var disCard = el("collab-disagreements");
+    if (disCard) disCard.style.display = "none";
+    toast("Loaded collaboration: " + runId, "ok");
+  }
+
+  function renderCollabParticipantCards(participants) {
+    var cards = el("collab-participant-cards");
+    if (!cards) return;
+    clear(cards);
+    cards.style.display = "";
+    for (var i = 0; i < participants.length; i++) {
+      var p = participants[i];
+      var stateClass = p.ok ? "done" : "error";
+      var badge = p.ok
+        ? Badge("settled", "ok")
+        : Badge((p.error && p.error.code) || "failed", "danger");
+      var bodyText = p.ok
+        ? (p.text || "")
+        : ((p.error && p.error.message) || "failed") + ((p.error && p.error.code) ? " (" + p.error.code + ")" : "");
+      cards.appendChild(
+        h("div", { class: "collab-step " + stateClass, "data-participant": p.participant.id, role: "listitem", "aria-label": "Participant " + (i + 1) + ": " + p.participant.role }, [
+          h("div", { class: "collab-step-head" }, [
+            h("span", { class: "collab-step-num", text: String(i + 1) }),
+            h("div", { class: "collab-step-roles" }, [
+              h("span", { class: "collab-step-role", text: p.participant.role, "data-en": p.participant.role, "data-fa": p.participant.role }),
+              h("span", { class: "collab-step-role", text: p.participant.provider + "/" + p.participant.modelId }),
+            ]),
+            h("div", { class: "grow" }),
+            badge,
+          ]),
+          h("pre", { class: "code collab-live", "aria-live": "polite" }, [h("span", { text: bodyText })]),
+        ]),
+      );
+    }
+  }
+
+  function renderCollabDisagreements(result) {
+    var host = el("collab-disagreements");
+    if (!host) return;
+    clear(host);
+    var ds = result.disagreements;
+    if (!ds || ds.length === 0) { host.style.display = "none"; return; }
+    host.style.display = "";
+    host.appendChild(h("h3", null, [h("span", { text: "Disagreements", "data-en": "Disagreements", "data-fa": "اختلافات" })]));
+    for (var i = 0; i < ds.length; i++) {
+      var d = ds[i];
+      host.appendChild(
+        h("div", { class: "row", role: "listitem", "aria-label": "Disagreement: " + d.field }, [
+          Badge(d.between.join(" vs "), "warn"),
+          h("span", { class: "mono", text: d.field }),
+          h("span", { class: "faint", text: d.a + " vs " + d.b }),
+          h("div", { class: "grow" }),
+          Badge(d.resolution, d.resolution === "unresolved" ? "danger" : "ok"),
+        ]),
+      );
+    }
+  }
+
+  async function renderCollabResult(result) {
+    var card = el("collab-result");
+    if (!card) return;
+    card.style.display = "";
+    var outText = el("collab-result-text");
+    if (result.synthesis && result.synthesis.text) {
+      text(outText, result.synthesis.text);
+    } else {
+      var parts = result.participants
+        .filter(function (p) { return p.ok && p.text; })
+        .map(function (p) { return "[" + p.participant.id + "] " + p.text; });
+      text(outText, parts.length ? parts.join("\n\n") : "(no settled output)");
+    }
+    var contribs = el("collab-contribs");
+    clear(contribs);
+    try {
+      var usage = await api.getRunUsage(result.runId);
+      if (usage && usage.models && usage.models.length > 0) {
+        var rows = usage.models.map(function (m) {
+          return [
+            h("span", { class: "mono", text: m.modelId }),
+            Badge("\u00d7" + m.invocations, "info"),
+          ];
+        });
+        var cost = usage.costUsd || 0;
+        rows.push([
+          Badge("run cost " + cost.toLocaleString() + " USD", cost > 0 ? "warn" : "ok"),
+          h("span", { class: "faint", text: "charged to the budget ledger", "data-en": "charged to the budget ledger", "data-fa": "\u0628\u0647 \u0634\u0645\u0627\u0631\u06af\u0627\u0646 \u0628\u0648\u062f\u062c\u0647 \u062a\u0639\u0644\u0642 \u062f\u0627\u0631\u062f" }),
+        ]);
+        contribs.appendChild(Table(["Model", "Invocations"], rows.map(function (r) {
+          return h("tr", null, r.map(function (c) { return h("td", null, [c]); }));
+        })));
+      }
+    } catch (_e) { /* usage stays coarse; the participant cards carry the answers */ }
+  }
+
+  async function startCollab() {
+    if (collabBusy) return;
+    var task = el("collab-task").value;
+    if (!task || !task.trim()) {
+      toast("Describe a goal first.", "warn");
+      return;
+    }
+    var participants = readCollabParticipants();
+    if (participants.length < 2) {
+      toast("At least two participants are required.", "warn");
+      return;
+    }
+    for (var j = 0; j < participants.length; j++) {
+      if (!participants[j].provider || !participants[j].modelId || !participants[j].task) {
+        toast("Every participant needs a provider, a model, and its own task.", "warn");
+        return;
+      }
+    }
+    var mode = el("collab-mode").value;
+    if (mode !== "INSPECT" && mode !== "SUGGEST" && mode !== "BUILD") mode = "INSPECT";
+    var strategy = el("collab-strategy").value;
+    var streaming = el("collab-stream").checked;
+
+    var request = {
+      task: task.trim(),
+      participants: participants,
+      strategy: strategy,
+      mode: mode,
+    };
+    var synthProvider = el("collab-synth-provider").value.trim();
+    var synthModel = el("collab-synth-model").value.trim();
+    if (synthProvider && synthModel) {
+      request.synthesis = { provider: synthProvider, modelId: synthModel };
+    }
+
+    collabRunId = "collab-" + Date.now().toString(36);
+    request.runId = collabRunId;
+
+    collabBusy = true;
+    var startBtn = el("collab-start");
+    startBtn.disabled = true;
+
+    var cards = el("collab-participant-cards");
+    clear(cards);
+    cards.style.display = "";
+    for (var i = 0; i < participants.length; i++) {
+      cards.appendChild(
+        h("div", { class: "collab-step running", "data-participant": participants[i].id }, [
+          h("div", { class: "collab-step-head" }, [
+            h("span", { class: "collab-step-num", text: String(i + 1) }),
+            h("div", { class: "collab-step-roles" }, [
+              h("span", { class: "collab-step-role", text: participants[i].role }),
+              h("span", { class: "collab-step-role", text: participants[i].provider + "/" + participants[i].modelId }),
+            ]),
+            h("div", { class: "grow" }),
+            Badge("running", "warn"),
+          ]),
+          h("pre", { class: "code collab-live" }, []),
+        ]),
+      );
+    }
+
+    var disCard = el("collab-disagreements");
+    if (disCard) disCard.style.display = "none";
+
+    if (streaming) {
+      request.streaming = true;
+      collabStreamCursor = 0;
+      stopCollabStreamPoll();
+      collabStreamTimer = setInterval(pollCollabStream, 400);
+    }
+
+    try {
+      var result = await api.runCollab(request);
+      if (result.ok) {
+        renderCollabParticipantCards(result.participants);
+        renderCollabDisagreements(result);
+        await renderCollabResult(result);
+        toast("Collaboration complete.", "ok");
+      } else {
+        var errMsg = (result.error && result.error.message) || (result.error && result.error.code) || "unknown";
+        toast("Collaboration stopped: " + errMsg, "danger");
+      }
+      collabRunId = null;
+    } catch (e) {
+      clear(cards);
+      cards.style.display = "";
+      cards.appendChild(ErrorPanel("COLLABORATION", esc(e), null));
+    } finally {
+      stopCollabStreamPoll();
+      collabBusy = false;
+      startBtn.disabled = false;
+      await loadRuns();
+      await refreshStatus();
     }
   }
 
@@ -435,6 +1316,23 @@
     if (!prompt || !prompt.trim()) {
       toast("Type a prompt first.", "warn");
       el("agent-prompt").focus();
+      return;
+    }
+    // The composer's execution type must not be silently downgraded: choosing
+    // Compare or Collaborate and pressing Send goes to the view that actually
+    // runs it, carrying the prompt across instead of running one model only.
+    var execType = el("exec-type") ? el("exec-type").value : "single";
+    if (execType !== "single") {
+      var carried = prompt;
+      showView(execType);
+      if (execType === "compare") {
+        var cmpTa = el("cmp-prompt");
+        if (cmpTa && !cmpTa.value) cmpTa.value = carried;
+      } else {
+        var collabTa = el("collab-task");
+        if (collabTa && !collabTa.value) collabTa.value = carried;
+      }
+      toast("Opening " + execType + " — your prompt was carried over.", "info");
       return;
     }
     // D12: the progressive stream must be torn down even on cancel/throw, so
@@ -447,10 +1345,11 @@
     var transcript = el("transcript");
     clear(transcript);
     transcript.appendChild(SkeletonRow(3));
-    var streaming = el("agent-stream") ? el("agent-stream").checked !== false : false;
+    var streaming = true; // exec-type is "single" here (the others redirected above)
     var streamCursor = 0;
     var streamTimer = null;
     var streamRow = null;
+    var pollRunId = null; // the stream key for THIS call; never the stale global
 
     function stopStreamPoll() {
       if (streamTimer !== null) {
@@ -494,7 +1393,7 @@
 
     async function pollStream() {
       try {
-        var env = await api.getAgentStream(state.runId || "pending-" + Date.now().toString(36), streamCursor);
+        var env = await api.getAgentStream(pollRunId, streamCursor);
         if (!env) return;
         for (var i = 0; i < env.events.length; i++) pushStreamRow(env.events[i]);
         streamCursor = env.nextIndex;
@@ -507,23 +1406,46 @@
     // D12: opt-in progressive events in the UI only. The run is still
     // single-buffered in the core contract — the progressive frames feed the
     // live preview row, never the persistence layer.
+    // D26 continuation: reuse the previous run id ONLY while that run is still
+    // paused for you (state.runId is kept exactly then, nothing else). A
+    // completed or failed run never lends its id to the next one — otherwise
+    // the next run's usage records append under a used key and one Runs row
+    // silently reports two runs' spend (the D29 rule).
+    var runId =
+      state.runId ||
+      "ui-" + Date.now().toString(36) + "-" + Math.floor(Math.random() * 46655).toString(36);
+    state.activeRunId = runId;
     if (streaming) {
-      var earlyRunId = state.runId || "pending-" + Date.now().toString(36);
-      state.runId = earlyRunId;
+      pollRunId = runId;
       streamTimer = setInterval(pollStream, 300);
+    }
+    // D7: the human's model choice in the New Chat selector. The catalogue
+    // keys models as "provider/model"; the preference carries the two parts
+    // separately so the engine selector can validate it against the catalogue
+    // and fall back honestly when it is unknown.
+    var modelSel = el("model-select");
+    var pref = null;
+    if (modelSel && modelSel.value) {
+      var slash = modelSel.value.indexOf("/");
+      if (slash > 0) {
+        pref = { provider: modelSel.value.slice(0, slash), modelId: modelSel.value.slice(slash + 1) };
+      }
     }
     try {
       var result = await api.runAgent({
-        runId: state.runId || "ui-" + Date.now().toString(36),
+        runId: runId,
         prompt: prompt,
         mode: state.mode,
-        auto: el("agent-auto").checked ? { auto: true } : undefined,
+        auto: el("agent-auto") && el("agent-auto").checked ? { auto: true } : undefined,
         streaming: streaming,
+        preference: pref ? pref : undefined,
       });
-      state.runId = result.runId || "";
-      el("agent-run-id").value = state.runId;
+      // Keep the id only while the run still waits for the human; anything
+      // else starts a fresh run id next time (see the D26 note above).
+      state.runId = result.pausedForHuman ? result.runId : "";
       el("agent-prompt").value = "";
       state.lastResult = result;
+      state.lastRequestedModel = pref ? pref.provider + "/" + pref.modelId : null;
       // One final render REPLACES, never appends: the pending stream row and
       // its skeleton are replaced by the assembled history.
       renderTranscript(result);
@@ -547,8 +1469,13 @@
   }
 
   async function cancelAgent() {
-    if (!state.runId) return;
-    await api.cancelRun(state.runId);
+    // The in-flight run id is authoritative for a Stop; the kept-for-resume id
+    // (state.runId) may point at a different, earlier paused run.
+    var target = state.activeRunId || state.runId;
+    if (!target) return;
+    await api.cancelRun(target);
+    state.activeRunId = "";
+    state.runId = ""; // a cancelled run is not resumable as if it were paused
     toast("Cancelled. Any pending approval was released — never approved.", "warn");
     await loadApprovals();
   }
@@ -1117,12 +2044,34 @@
      Workspace view (M5)
      ================================================================== */
 
+  /** The sidebar's workspace sub-list: the same roots the view shows, one
+   *  compact row each, so an open project is reachable without the view. */
+  async function loadNavWorkspaces() {
+    var host = el("nav-workspaces");
+    if (!host) return;
+    clear(host);
+    var roots = [];
+    try { roots = await api.listWorkspaceRoots(); } catch (_e) { roots = []; }
+    (roots || []).forEach(function (root) {
+      var name = root.split(/[\\/]/).filter(Boolean).pop() || root;
+      host.appendChild(
+        h("button", {
+          type: "button",
+          class: "nav-item",
+          title: root,
+          onClick: function () { showView("workspace"); },
+        }, [h("span", { class: "nav-label mono", text: name })]),
+      );
+    });
+  }
+
   async function loadWorkspace() {
     var host = el("workspace-roots");
     clear(host);
     host.appendChild(SkeletonRow(2));
     var roots = await api.listWorkspaceRoots();
     clear(host);
+    loadNavWorkspaces().catch(function () {});
     if (!roots || roots.length === 0) {
       host.appendChild(
         EmptyState("No workspace folder is open. Every tool call is refused until you add one."),
@@ -1234,9 +2183,38 @@
 
     var budgetHost = el("settings-budget");
     clear(budgetHost);
+    budgetHost.appendChild(h("h3", { text: "Spend budget" }));
+    budgetHost.appendChild(
+      h("p", { class: "muted", style: "margin:0 0 var(--s2)", text: "USD the engine may spend on paid models. 0 means no spend — a paid model is selectable but will be refused at the budget gate. Raising this is an explicit act; nothing raises it without you typing a number." }),
+    );
     var budget = await api.getBudget();
-    budgetHost.appendChild(h("h3", { text: "Budget" }));
-    budgetHost.appendChild(mono(JSON.stringify(budget, null, 2)));
+    var budgetInput = h("input", {
+      id: "settings-budget-input",
+      type: "number",
+      class: "input",
+      min: "0",
+      max: "1000000",
+      step: "1",
+      value: String(budget.budgetUsd),
+    });
+    var budgetStatus = h("div", { class: "muted mono", style: "margin:var(--s2) 0 0", text: "current: " + budget.budgetUsd + " USD · reserved " + budget.reservedUsd + " · spent " + budget.spentUsd });
+    budgetInput.addEventListener("change", async function () {
+      var n = Number(budgetInput.value);
+      if (!Number.isFinite(n) || n < 0) {
+        budgetInput.value = String(budget.budgetUsd);
+        budgetStatus.textContent = "invalid value; unchanged";
+        return;
+      }
+      try {
+        var saved = await api.patchSettings({ budgetUsd: Math.min(n, 1000000) });
+        budgetInput.value = String(saved.budgetUsd);
+        budgetStatus.textContent = "budget set to " + saved.budgetUsd + " USD";
+      } catch (e) {
+        budgetStatus.textContent = "failed to save budget";
+      }
+    });
+    budgetHost.appendChild(budgetInput);
+    budgetHost.appendChild(budgetStatus);
 
     var frozenHost = el("settings-frozen");
     clear(frozenHost);
@@ -1262,7 +2240,7 @@
           h("div", { class: "card card-pad row" }, [
             h("div", { class: "grow stack" }, [
               h("span", { class: "mono", text: p.id + (p.displayName ? " — " + p.displayName : "") }),
-              h("span", { class: "muted mono", text: p.endpoint + " · " + (p.models || []).map(function (m) { return m.id; }).join(", ") }),
+              h("span", { class: "muted mono", text: p.endpoint + " · " + (p.protocol || "openai-compatible") + " · " + (p.models || []).map(function (m) { return m.id; }).join(", ") }),
             ]),
             Button("Remove", {
               small: true,
@@ -1289,15 +2267,23 @@
     var endpointInput = h("input", { id: "pv-endpoint", type: "text", class: "input", placeholder: "http://127.0.0.1:11434/v1" });
     var keyInput = h("input", { id: "pv-keyenv", type: "text", class: "input", placeholder: "env var name, or empty for a local server" });
     var modelsInput = h("input", { id: "pv-models", type: "text", class: "input", placeholder: "llama3, qwen2.5 (comma-separated)" });
+    var protocolInput = h("select", { id: "pv-protocol", class: "input" }, [
+      h("option", { value: "openai-compatible", text: "OpenAI-compatible (POST /chat/completions)" }),
+      h("option", { value: "anthropic", text: "Anthropic Messages (POST /messages) — FCC gateway" }),
+    ]);
     const testOut = h("div", { class: "muted mono", text: "" });
+    const refreshOut = h("div", { class: "muted mono", text: "" });
+    var discovered = null;
     var answer = await openModal(
       "Add a model provider",
       h("div", { class: "stack" }, [
         h("p", { class: "muted", style: "margin:0", text: "A key travels only as an environment-variable name — the value is read at call time by the engine, never stored here." }),
         h("label", { class: "field" }, [h("span", { text: "Id" }), idInput]),
         h("label", { class: "field" }, [h("span", { text: "Endpoint" }), endpointInput]),
+        h("label", { class: "field" }, [h("span", { text: "Protocol" }), protocolInput]),
         h("label", { class: "field" }, [h("span", { text: "Key env var" }), keyInput]),
         h("label", { class: "field" }, [h("span", { text: "Models" }), modelsInput]),
+        h("p", { class: "muted", style: "margin:0", text: "Type the model ids you know, or leave them blank and use Refresh models to pull the full catalogue the gateway advertises." }),
         Button("Test config", {
           small: true,
           onClick: async function () {
@@ -1307,6 +2293,7 @@
                 id: String(idInput.value || "").trim(),
                 displayName: String(idInput.value || "").trim(),
                 endpoint: String(endpointInput.value || "").trim(),
+                protocol: String(protocolInput.value || "openai-compatible"),
                 apiKeyEnv: String(keyInput.value || "").trim() || null,
                 models: String(modelsInput.value || "")
                   .split(",")
@@ -1321,7 +2308,31 @@
             }
           },
         }),
+        Button("Refresh models", {
+          small: true,
+          onClick: async function () {
+            refreshOut.textContent = "refreshing…";
+            try {
+              var result = await api.discoverModels({
+                endpoint: String(endpointInput.value || "").trim(),
+                protocol: String(protocolInput.value || "openai-compatible"),
+                apiKeyEnv: String(keyInput.value || "").trim() || null,
+              });
+              if (result.ok) {
+                discovered = result.models;
+                refreshOut.textContent = `Discovered ${result.count} model(s) from the gateway — they will be registered when you save.`;
+              } else {
+                discovered = null;
+                refreshOut.textContent = `FAILED: ${result.detail}`;
+              }
+            } catch (e) {
+              discovered = null;
+              refreshOut.textContent = String(e);
+            }
+          },
+        }),
         testOut,
+        refreshOut,
       ]),
       { confirmLabel: "Add" },
     );
@@ -1329,11 +2340,17 @@
     var id = String(idInput.value || "").trim();
     var endpoint = String(endpointInput.value || "").trim();
     var keyEnv = String(keyInput.value || "").trim();
-    var modelIds = String(modelsInput.value || "")
+    var protocol = String(protocolInput.value || "openai-compatible");
+    var manualModels = String(modelsInput.value || "")
       .split(",")
       .map(function (s) { return s.trim(); })
       .filter(function (s) { return s.length > 0; });
-    if (!id || !endpoint || modelIds.length === 0) {
+    var modelDefs = manualModels.length > 0
+      ? manualModels.map(function (m) { return { id: m, displayName: m }; })
+      : (discovered || []).map(function (m) {
+          return { id: m.id, displayName: m.displayName || m.id, streaming: m.streaming === true };
+        });
+    if (!id || !endpoint || modelDefs.length === 0) {
       toast("A provider needs an id, an endpoint, and at least one model.", "warn");
       return;
     }
@@ -1344,8 +2361,9 @@
         id: id,
         displayName: id,
         endpoint: endpoint,
+        protocol: protocol,
         apiKeyEnv: keyEnv || null,
-        models: modelIds.map(function (m) { return { id: m, displayName: m }; }),
+        models: modelDefs,
       },
     ]);
     var saved = await api.patchSettings({ providers: next });
@@ -1421,11 +2439,13 @@
   async function refreshStatus() {
     var status = await api.getSystemStatus();
     var posture = await api.getSelectionPosture();
+    var settings = await api.getSettings();
+    var providerCount = (settings && settings.providers) || [];
     text(
       el("posture"),
       "egress " + posture.egress + " · budget " + posture.budgetUsd + " USD · policy " +
-        posture.policy + " · runs " + status.runs + " · credentials " +
-        (status.credentials || []).length,
+        posture.policy + " · providers " + providerCount.length + " · runs " +
+        status.runs + " · credentials " + (status.credentials || []).length,
     );
     text(
       el("sidebar-foot"),
@@ -1438,10 +2458,14 @@
      ================================================================== */
 
   var loaders = {
-    agent: function () {
+    chat: function () {
       renderTranscript(state.lastResult);
       syncAgentState();
+      renderWelcome();
+      populateModelSelect();
     },
+    compare: loadCompare,
+    collab: loadCollab,
     runs: loadRuns,
     tools: loadTools,
     approvals: loadApprovals,
@@ -1501,7 +2525,8 @@
     var navItems = document.querySelectorAll(".nav-item");
     for (var i = 0; i < navItems.length; i++) {
       navItems[i].addEventListener("click", function (ev) {
-        showView(ev.currentTarget.getAttribute("data-view"));
+        var view = ev.currentTarget.getAttribute("data-view");
+        if (view) showView(view);
       });
     }
 
@@ -1512,12 +2537,18 @@
       });
     });
 
-    MODES.forEach(function (mode) {
-      var btn = el("mode-" + mode);
-      if (btn) btn.addEventListener("click", function () {
-        setMode(mode);
-        if (state.view === "tools") loadTools().catch(function () {});
-      });
+    // The chat-head segment is the EXECUTION-type control (Single / Compare /
+    // Collaborate), not the safety mode: it only ever exists for view routing.
+    // Safety modes live in the Settings → Mode select and the diagnostic view.
+    var singleBtn = el("mode-INSPECT");
+    if (singleBtn) singleBtn.addEventListener("click", function () { selectExecType("single"); });
+    var cmpBtn = el("mode-COMPARE");
+    if (cmpBtn) cmpBtn.addEventListener("click", function () { selectExecType("compare"); });
+    var collabBtn = el("mode-COLLAB");
+    if (collabBtn) collabBtn.addEventListener("click", function () { selectExecType("collab"); });
+    var execTypeSel = el("exec-type");
+    if (execTypeSel) execTypeSel.addEventListener("change", function () {
+      selectExecType(execTypeSel.value);
     });
 
     el("agent-run").addEventListener("click", runAgent);
@@ -1555,6 +2586,48 @@
       }
     });
 
+    /* Model picker: live search, optional cost filter, and a refresh affordance. */
+    var modelSearch = el("model-search");
+    if (modelSearch) modelSearch.addEventListener("input", function () {
+      state.modelSearch = modelSearch.value;
+      renderModelOptions();
+    });
+    var costFilter = el("model-cost-filter");
+    if (costFilter) costFilter.addEventListener("click", function (ev) {
+      var btn = ev.target;
+      if (!btn || !btn.hasAttribute("data-cost")) return;
+      state.modelCostFilter = btn.getAttribute("data-cost");
+      var btns = costFilter.querySelectorAll("button");
+      for (var i = 0; i < btns.length; i++) {
+        btns[i].setAttribute("aria-pressed", btns[i].getAttribute("data-cost") === state.modelCostFilter ? "true" : "false");
+      }
+      renderModelOptions();
+    });
+    var modelRefresh = el("model-refresh");
+    if (modelRefresh) modelRefresh.addEventListener("click", function () {
+      modelRefresh.disabled = true;
+      refreshModelCatalog().then(function () {
+        toast("Models & provider status refreshed.", "ok");
+      }).catch(function () {
+        toast("Could not refresh the model list.", "warn");
+      }).then(function () {
+        modelRefresh.disabled = false;
+      });
+    });
+
+    el("compare-start").addEventListener("click", function () {
+      startCompare();
+    });
+    el("collab-start").addEventListener("click", function () {
+      startCollab();
+    });
+    el("collab-add-participant")?.addEventListener("click", function () {
+      addCollabParticipant();
+    });
+    el("collab-refresh-recent")?.addEventListener("click", function () {
+      loadRecentCollabs().catch(function () {});
+    });
+
     el("workspace-add").addEventListener("click", function () {
       addRoot().catch(function (e) {
         toast("Could not add a folder: " + esc(e), "danger");
@@ -1577,6 +2650,7 @@
       modeSelect.addEventListener("change", function () {
         setMode(modeSelect.value);
         api.patchSettings({ defaultMode: modeSelect.value });
+        if (state.view === "tools") loadTools().catch(function () {});
       });
     }
 
@@ -1613,6 +2687,37 @@
       if (document.hidden) stopPolling();
       else startPolling();
     });
+
+    /* Language switching (M1): toggle data-en/data-fa and RTL direction. */
+    var langSelect = el("lang-select");
+    if (langSelect) {
+      langSelect.addEventListener("change", function () {
+        setLanguage(langSelect.value);
+      });
+    }
+  }
+
+  function setLanguage(lang) {
+    state.lang = lang;
+    var root = document.documentElement;
+    if (root) {
+      root.lang = lang;
+      root.dataset.dir = lang === "fa" ? "rtl" : "ltr";
+    }
+    var langSelect = el("lang-select");
+    if (langSelect) langSelect.value = lang;
+    // Toggle data-en/data-fa text on every labelled element.
+    var labelled = document.querySelectorAll("[data-en]");
+    for (var i = 0; i < labelled.length; i++) {
+      var node = labelled[i];
+      var fa = node.getAttribute("data-fa");
+      if (lang === "fa" && fa) node.textContent = fa;
+      else {
+        var en = node.getAttribute("data-en");
+        if (en) node.textContent = en;
+      }
+    }
+    toast("Language: " + (lang === "fa" ? "فارسی" : "English"), "ok");
   }
 
   async function init() {
@@ -1630,11 +2735,27 @@
     wire();
     renderTranscript(null);
     syncAgentState();
+    // The composer picker and the sidebar sub-lists must be live from first
+    // paint: the views' loaders only run on navigation, so a first session
+    // would otherwise start with an empty model select and empty sidebar.
+    populateModelSelect().catch(function () {});
+    loadNavWorkspaces().catch(function () {});
+    var convList = el("nav-conversations-list");
+    if (convList) {
+      convList.appendChild(
+        h("button", { type: "button", class: "nav-item", disabled: true }, [
+          h("span", { class: "nav-label faint", text: "No conversations yet" }),
+        ]),
+      );
+    }
     await refreshStatus();
     await loadApprovals();
     await loadTools();
     startPolling();
     updateFirstRunCard();
+    // Language: default to English; a stored preference would go through
+    // patchSettings in a future iteration. For now the selector is the control.
+    setLanguage("en");
   }
 
   async function updateFirstRunCard() {

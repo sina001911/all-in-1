@@ -13,6 +13,7 @@ import {
   type SettingsProviderModel,
   type SettingsStore,
 } from "./types.ts";
+import { PROVIDER_PROTOCOLS } from "../../../src/providers/types.ts";
 import { JsonFileStore } from "./json-store.ts";
 
 const ALLOWED_KEYS: readonly (keyof DesktopSettings)[] = [
@@ -20,6 +21,7 @@ const ALLOWED_KEYS: readonly (keyof DesktopSettings)[] = [
   "theme",
   "defaultMode",
   "providers",
+  "budgetUsd",
 ];
 
 /** An environment-variable NAME only: uppercase, digits, underscore. Never a key value. */
@@ -118,6 +120,12 @@ export function sanitizeProvider(raw: unknown): SettingsProvider | undefined {
   } else if (raw.apiKeyEnv === null) {
     out.apiKeyEnv = null;
   }
+  // The protocol selects the adapter that knows how to speak to this endpoint.
+  // Only known protocols are accepted; anything else falls back to the default
+  // `openai-compatible`, so a typo can never select an unintended adapter.
+  if (typeof raw.protocol === "string" && PROVIDER_PROTOCOLS.includes(raw.protocol.trim() as never)) {
+    out.protocol = raw.protocol.trim();
+  }
   const timeoutMs = finiteBounded(raw.timeoutMs, 1_000, 600_000);
   if (timeoutMs !== undefined) out.timeoutMs = timeoutMs;
   const maxRetries = finiteBounded(raw.maxRetries, 0, 10);
@@ -153,6 +161,7 @@ type MutableSettingsProvider = {
   id: string;
   displayName?: string;
   endpoint: string;
+  protocol?: string;
   apiKeyEnv?: string | null;
   models: readonly SettingsProviderModel[];
   timeoutMs?: number;
@@ -166,6 +175,7 @@ function sanitize(patch: Partial<DesktopSettings>): Partial<DesktopSettings> {
     theme?: "system" | "light" | "dark";
     defaultMode?: "INSPECT" | "SUGGEST" | "BUILD";
     providers?: readonly SettingsProvider[];
+    budgetUsd?: number;
   } = {};
   for (const key of ALLOWED_KEYS) {
     if (key in patch) {
@@ -173,6 +183,12 @@ function sanitize(patch: Partial<DesktopSettings>): Partial<DesktopSettings> {
       // without trusting the caller.
       if (key === "providers") {
         out.providers = sanitizeProviders((patch as Record<string, unknown>).providers);
+      } else if (key === "budgetUsd") {
+        // Bounded: 0 (no spend) to 1,000,000 USD. A non-finite or negative
+        // value is dropped rather than coerced, so a typo can never unlock
+        // spend the user did not intend.
+        const n = finiteBounded((patch as Record<string, unknown>).budgetUsd, 0, 1_000_000);
+        if (n !== undefined) out.budgetUsd = n;
       } else {
         (out as Record<string, unknown>)[key] = (patch as Record<string, unknown>)[key];
       }

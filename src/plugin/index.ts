@@ -8,7 +8,7 @@
  * deterministically with zero npm dependencies and no `node_modules` present.
  *
  * The plugin registers commands and nothing else. It registers no provider, no
- * model, no tool, and no integration: the frozen defaults (FREE_ONLY, zero
+ * model, no tool, and no integration: the frozen defaults (PREFERRED_FREE, zero
  * budget, deny-all egress, MAIN_CODER immutability, media disabled) are
  * untouched, and the package stays inert until a human loads it and opens a
  * remote path through the three explicit acts outside this file.

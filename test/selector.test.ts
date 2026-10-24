@@ -76,17 +76,23 @@ describe("selector capability and modality filtering", () => {
     // The chain head is policy-blocked, so the walk follows its declared
     // fallback to a model that does not declare the capability. That is the
     // only path on which the capability check actually fires: candidatesFor
-    // already filters chain entries by declared capability.
-    const { selector } = harness([
-      {
-        id: "acme/pro",
-        capabilities: ["CODING"],
-        costClass: "PAID",
-        inputPer1M: 1,
-        fallback: "acme/offtopic",
-      },
-      { id: "acme/offtopic", capabilities: ["REASONING"], costClass: "FREE" },
-    ]);
+    // already filters chain entries by declared capability. The block is
+    // asserted explicitly (FREE_ONLY) rather than relied on: D31 relaxed the
+    // default to PREFERRED_FREE, under which a paid chain head would now
+    // qualify and the fallback walk would never run.
+    const { selector } = harness(
+      [
+        {
+          id: "acme/pro",
+          capabilities: ["CODING"],
+          costClass: "PAID",
+          inputPer1M: 1,
+          fallback: "acme/offtopic",
+        },
+        { id: "acme/offtopic", capabilities: ["REASONING"], costClass: "FREE" },
+      ],
+      "FREE_ONLY",
+    );
     const decision = selector({ capability: "CODING" });
     expect(decision.ok).toBe(false);
     const entry = decision.trace.find((t) => t.modelId === "acme/offtopic");
@@ -153,21 +159,27 @@ describe("selector capability and modality filtering", () => {
   });
 
   it("rejects a disabled model reached via a declared fallback", () => {
-    const { selector } = harness([
-      {
-        id: "acme/pro",
-        capabilities: ["CODING"],
-        costClass: "PAID",
-        inputPer1M: 1,
-        fallback: "acme/broken",
-      },
-      {
-        id: "acme/broken",
-        capabilities: ["CODING"],
-        costClass: "FREE",
-        enabled: false,
-      },
-    ]);
+    // The chain head is PAID, so the fallback walk only runs when the policy
+    // blocks it. Asserted explicitly (FREE_ONLY): under the new PREFERRED_FREE
+    // default the head would now qualify and this path would not be exercised.
+    const { selector } = harness(
+      [
+        {
+          id: "acme/pro",
+          capabilities: ["CODING"],
+          costClass: "PAID",
+          inputPer1M: 1,
+          fallback: "acme/broken",
+        },
+        {
+          id: "acme/broken",
+          capabilities: ["CODING"],
+          costClass: "FREE",
+          enabled: false,
+        },
+      ],
+      "FREE_ONLY",
+    );
     const decision = selector({ capability: "CODING" });
     expect(decision.ok).toBe(false);
     const entry = decision.trace.find((t) => t.modelId === "acme/broken");
@@ -177,9 +189,12 @@ describe("selector capability and modality filtering", () => {
 
 describe("selector paid-model policy (frozen rules)", () => {
   it("under FREE_ONLY, rejects a paid model and records the policy reason", () => {
-    const { selector } = harness([
-      { id: "acme/pro", capabilities: ["CODING"], costClass: "PAID", inputPer1M: 1 },
-    ]);
+    // Policy asserted explicitly: the frozen default relaxed to PREFERRED_FREE
+    // in D31, under which this paid model would now qualify.
+    const { selector } = harness(
+      [{ id: "acme/pro", capabilities: ["CODING"], costClass: "PAID", inputPer1M: 1 }],
+      "FREE_ONLY",
+    );
     const decision = selector({ capability: "CODING" });
     expect(decision.ok).toBe(false);
     const entry = decision.trace.find((t) => t.modelId === "acme/pro");
@@ -190,10 +205,15 @@ describe("selector paid-model policy (frozen rules)", () => {
   });
 
   it("under FREE_ONLY, prefers a free model over a paid one in the same chain", () => {
-    const { selector } = harness([
-      { id: "acme/pro", capabilities: ["CODING"], costClass: "PAID", inputPer1M: 1, priority: 90 },
-      { id: "acme/free", capabilities: ["CODING"], costClass: "FREE", priority: 10 },
-    ]);
+    // Policy asserted explicitly: under the new PREFERRED_FREE default both
+    // would qualify and the paid head would win on priority.
+    const { selector } = harness(
+      [
+        { id: "acme/pro", capabilities: ["CODING"], costClass: "PAID", inputPer1M: 1, priority: 90 },
+        { id: "acme/free", capabilities: ["CODING"], costClass: "FREE", priority: 10 },
+      ],
+      "FREE_ONLY",
+    );
     const decision = selector({ capability: "CODING" });
     expect(decision.model).toEqual({ provider: "acme", modelId: "free" });
   });
@@ -309,21 +329,26 @@ describe("selector preference handling", () => {
   });
 
   it("falls back to the chain when the preference fails a check", () => {
-    const { selector } = harness([
-      { id: "acme/a", capabilities: ["CODING"], costClass: "FREE", priority: 100 },
-      {
-        id: "acme/b",
-        capabilities: ["CODING"],
-        costClass: "PAID",
-        inputPer1M: 1,
-        priority: 1,
-      },
-    ]);
+    // The preference is a real candidate but policy-blocked. Asserted
+    // explicitly (FREE_ONLY): under the new PREFERRED_FREE default the paid
+    // preference would qualify and be selected instead of falling back.
+    const { selector } = harness(
+      [
+        { id: "acme/a", capabilities: ["CODING"], costClass: "FREE", priority: 100 },
+        {
+          id: "acme/b",
+          capabilities: ["CODING"],
+          costClass: "PAID",
+          inputPer1M: 1,
+          priority: 1,
+        },
+      ],
+      "FREE_ONLY",
+    );
     const decision = selector({
       capability: "CODING",
       preference: { provider: "acme", modelId: "b" },
     });
-    // The preference is a real candidate but policy-blocked under FREE_ONLY.
     expect(decision.model).toEqual({ provider: "acme", modelId: "a" });
     expect(decision.warnings.some((w) => w.includes("did not qualify"))).toBe(true);
   });

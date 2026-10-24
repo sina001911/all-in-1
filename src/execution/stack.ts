@@ -32,7 +32,7 @@ export interface ExecutionStack {
 }
 
 export function buildExecutionStack(opts: {
-  policy?: "FREE_ONLY" | "PREMIUM_ALLOWED";
+  policy?: "FREE_ONLY" | "PREFERRED_FREE" | "BALANCED" | "PREMIUM_ALLOWED" | "MANUAL";
   budgetUsd?: number;
   /**
    * Hosts to allowlist for egress. Applied BEFORE the engine is built so the

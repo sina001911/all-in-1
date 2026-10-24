@@ -22,8 +22,8 @@
  *   PAID          -> pricing "premium"
  *   UNKNOWN_COST  -> pricing "unknown"   (frozen rule: unknown is never free)
  *
- *   FREE_ONLY       -> FREE_ONLY          (frozen default)
- *   ASK_BEFORE_PAID -> PREFERRED_FREE     (free first; paid needs approval)
+ *   FREE_ONLY       -> FREE_ONLY
+ *   ASK_BEFORE_PAID -> PREFERRED_FREE     (frozen default: free first; paid needs approval)
  *   PAID_ALLOWED    -> PREMIUM_ALLOWED
  *   BALANCED        -> BALANCED
  *   PREMIUM_ALLOWED -> PREMIUM_ALLOWED
@@ -57,8 +57,8 @@ export const CAPABILITY_COST_POLICIES = [
 ] as const;
 export type CapabilityCostPolicy = (typeof CAPABILITY_COST_POLICIES)[number];
 
-/** Frozen default: FREE_ONLY, matching DEFAULT_COST_POLICY. */
-export const DEFAULT_CAPABILITY_COST_POLICY: CapabilityCostPolicy = "FREE_ONLY";
+/** Frozen default: ASK_BEFORE_PAID, matching DEFAULT_COST_POLICY (PREFERRED_FREE). */
+export const DEFAULT_CAPABILITY_COST_POLICY: CapabilityCostPolicy = "ASK_BEFORE_PAID";
 
 /** A capability's family, used for grouping and media gating. */
 export const CAPABILITY_CATEGORIES = [

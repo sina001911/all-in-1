@@ -6,8 +6,10 @@
  * the security spine; this module only supplies stores and a log sink.
  *
  * Frozen posture is preserved by construction:
- *   - policy is left at its default (FREE_ONLY);
- *   - budget is constructed at 0 (spendBudgetUsd frozen default);
+ *   - policy is left at its default (PREFERRED_FREE: free first, paid with
+ *     approval — the frozen default was relaxed from FREE_ONLY in D31);
+ *   - budget is constructed from the user's settings (0 by default, the
+ *     spendBudgetUsd frozen default);
  *   - no allowHosts are passed, so egress stays deny-all;
  *   - no remote provider adapter is registered, only the deterministic local
  *     adapter that `buildSpecialistStack` always registers.
@@ -121,16 +123,22 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
     undefined,
     new JsonFileStore(paths.root, "approvals.json"),
   );
-  const budget = new PersistentBudgetLedger(
-    /* budgetUsd */ 0, // frozen default: spendBudgetUsd = 0
-    undefined,
-    new JsonFileStore(paths.root, "budget.json"),
-  );
 
   // D7: the user's registered providers are read from settings BEFORE the core
   // stack is built, so the catalogue, adapters, and egress policy the engine
   // holds are the ones the user configured.
   const settings = settingsStore.get();
+
+  // The spend budget is user-configurable from the Settings UI. The frozen
+  // default is 0 (no spend); raising it is an explicit human act. The ledger
+  // is reconstructed on every reload so a change takes effect atomically with
+  // the provider rebuild, and the reserved/spent state is restored from the
+  // same file the old ledger persisted to.
+  let budget = new PersistentBudgetLedger(
+    settings.budgetUsd,
+    undefined,
+    new JsonFileStore(paths.root, "budget.json"),
+  );
 
   const buildCore = (): SpecialistStack =>
     buildSpecialistStack({
@@ -194,7 +202,9 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
     credentials: opts.credentials,
     cancellation: new CancellationHub(),
     approvals,
-    budget,
+    get budget() {
+      return budget;
+    },
     tools,
     toolApprover,
     workspaceRoots,
@@ -208,8 +218,19 @@ export function buildDesktopStack(opts: DesktopStackOptions): DesktopStack {
       return current.stack.registrationWarnings;
     },
     reloadProviders() {
-      // Build first: if the rebuild throws, nothing below runs and the old
-      // stack keeps serving both in-flight and new invocations.
+      // Re-read the spend budget from settings FIRST: the ledger is
+      // reconstructed with the current budgetUsd, restoring reserved/spent
+      // state from the same file, so a budget change takes effect atomically
+      // with the provider rebuild. If the rebuild throws, nothing below runs
+      // and the old stack keeps serving both in-flight and new invocations.
+      const s = settingsStore.get();
+      if (s.budgetUsd !== budget.budgetUsd) {
+        budget = new PersistentBudgetLedger(
+          s.budgetUsd,
+          undefined,
+          new JsonFileStore(paths.root, "budget.json"),
+        );
+      }
       const next = buildCore();
       portal.swap(next.stack.engine);
       current = next;

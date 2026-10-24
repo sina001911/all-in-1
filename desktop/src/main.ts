@@ -13,10 +13,10 @@
  *
  * The application does not import or require OpenCode anywhere.
  */
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage, session } from "electron";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildDesktopStack } from "./desktop-stack.ts";
 import { DesktopFacade } from "./facade.ts";
 import type { DesktopStack } from "./desktop-stack.ts";
@@ -24,10 +24,17 @@ import { ElectronSafeStorageCredentialProvider } from "./credentials/electron-sa
 import { applyPickedRoot } from "./workspace/pick.ts";
 // D29: the diagnostic request mapping lives outside the Electron boundary so
 // the seam that forwards `runId`/`streaming` to the facade is exercised in CI.
-import { buildDiagnosticRequest, isSafetyMode } from "./ipc-requests.ts";
+import { buildCollabRequest, buildDiagnosticRequest, buildManyRequest, isSafetyMode } from "./ipc-requests.ts";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const isSelfTest = process.argv.includes("--selftest");
+
+/**
+ * D31: the one URL the app window is allowed to occupy. `loadFile()` does not
+ * emit `will-navigate`, so this is only ever compared against a navigation the
+ * page or a user click starts *after* the initial load.
+ */
+const RENDERER_URL = pathToFileURL(join(__dirname, "renderer", "index.html")).toString();
 
 function buildStack(): DesktopStack {
   const baseDir = app.getPath("userData");
@@ -144,6 +151,19 @@ function registerHandlers(facade: DesktopFacade): void {
   // can explain a skipped provider instead of pretending it worked.
   ipcMain.handle("all-in-1:providers:warnings", () => facade.getProviderWarnings());
   ipcMain.handle("all-in-1:providers:test", (_e, raw: unknown) => facade.testProviderConfig(raw));
+  ipcMain.handle("all-in-1:providers:discover", (_e, input: unknown) => {
+    if (!input || typeof input !== "object") throw new Error("Invalid discover request");
+    const req = input as Record<string, unknown>;
+    if (typeof req.endpoint !== "string" || req.endpoint.trim() === "") {
+      throw new Error("endpoint must be a non-empty string");
+    }
+    return facade.discoverModels({
+      endpoint: req.endpoint,
+      protocol: typeof req.protocol === "string" ? req.protocol : undefined,
+      apiKeyEnv: typeof req.apiKeyEnv === "string" ? req.apiKeyEnv : null,
+      maxModels: typeof req.maxModels === "number" ? req.maxModels : undefined,
+    });
+  });
   // D6 folder picker. The renderer supplies NO path: it asks main to let the
   // user choose one. Main owns the dialog, and applies the result through the
   // sanitized settings write, so a directory can only enter the tool sandbox
@@ -180,6 +200,19 @@ function registerHandlers(facade: DesktopFacade): void {
     if (req.mode !== "INSPECT" && req.mode !== "SUGGEST" && req.mode !== "BUILD") {
       throw new Error("mode must be INSPECT, SUGGEST, or BUILD");
     }
+    // The user's model choice must survive the boundary: a validated
+    // provider/model pair reaches the engine as the preference the selector
+    // honours first — and only the pair, never a free-form override. When the
+    // engine cannot honour it, it falls back WITH A WARNING and reports the
+    // actual executed model; a silent substitution is the one outcome this
+    // shape check exists to prevent.
+    let preference: { provider: string; modelId: string } | undefined;
+    if (req.preference && typeof req.preference === "object") {
+      const p = req.preference as Record<string, unknown>;
+      if (typeof p.provider === "string" && typeof p.modelId === "string") {
+        preference = { provider: p.provider, modelId: p.modelId };
+      }
+    }
     return facade.runAgent({
       runId: req.runId,
       prompt: req.prompt,
@@ -190,8 +223,22 @@ function registerHandlers(facade: DesktopFacade): void {
       // D12: opt-in streaming flag on every run request; the bridge sink is
       // main-side, the renderer never supplies the event stream itself.
       streaming: req.streaming === true,
+      preference,
     });
   });
+  // Compare: one prompt, N selected models, each a full 7-gate run. The
+  // mapping (not the registration) is the seam, D29 pattern — the facade is
+  // only ever fed a validated ManyModelRequest.
+  ipcMain.handle("all-in-1:agent:many", (_e, raw: unknown) =>
+    facade.runMany(buildManyRequest(raw)),
+  );
+  // D34: the collaborative path. The mapping (not the registration) is the
+  // seam, D29 pattern — the facade is only ever fed a validated
+  // `CollaborateRequest`, and a raw object field that is not in this list
+  // never crosses the boundary.
+  ipcMain.handle("all-in-1:collab:run", (_e, raw: unknown) =>
+    facade.runCollab(buildCollabRequest(raw)),
+  );
   ipcMain.handle("all-in-1:agent:stream", (_e, raw: unknown) => {
     if (!raw || typeof raw !== "object") throw new Error("Invalid stream query");
     const q = raw as Record<string, unknown>;
@@ -250,8 +297,19 @@ function createWindow(facade: DesktopFacade): void {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      // D31: no embedded browser surface. Nothing here uses a <webview>, so the
+      // tag is switched off rather than merely left unused.
+      webviewTag: false,
       preload: join(__dirname, "preload.cjs"),
     },
+  });
+
+  // D31: the window is one static file that never opens another window and
+  // never navigates. The CSP already removes the network, so these two handlers
+  // close the remaining ways out — a popup, or a redirect off the app.
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event, url) => {
+    if (url !== RENDERER_URL) event.preventDefault();
   });
 
   win.loadFile(join(__dirname, "renderer", "index.html")).catch((e: unknown) => {
@@ -318,6 +376,15 @@ function bootstrap(): void {
   }
 
   app.whenReady().then(() => {
+    // D31: the renderer consumes no browser capability — no camera, microphone,
+    // geolocation, clipboard or OS notification (its toasts are in-page DOM).
+    // Denying every request therefore costs nothing legitimate, and it means a
+    // compromised renderer cannot ask the OS for anything at all.
+    session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => {
+      callback(false);
+    });
+    session.defaultSession.setPermissionCheckHandler(() => false);
+
     createWindow(facade);
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow(facade);

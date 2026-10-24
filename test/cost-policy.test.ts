@@ -22,8 +22,11 @@ describe("cost policy", () => {
     ]);
   });
 
-  it("defaults to FREE_ONLY", () => {
-    expect(DEFAULT_COST_POLICY).toBe("FREE_ONLY");
+  it("defaults to PREFERRED_FREE", () => {
+    // D31: the frozen default relaxed from FREE_ONLY to PREFERRED_FREE so a
+    // paid model is eligible by default. Free is still selected first; paid
+    // needs approval and a budget. UNKNOWN_COST stays blocked.
+    expect(DEFAULT_COST_POLICY).toBe("PREFERRED_FREE");
     expect(UNKNOWN_PRICING_BEHAVIOR).toBe("premium");
   });
 

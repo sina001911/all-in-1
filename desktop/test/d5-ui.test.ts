@@ -136,7 +136,7 @@ describe("renderer parses as browser JavaScript (the D1 regression)", () => {
             return async () => ({
               egress: "deny-all",
               budgetUsd: 0,
-              policy: "FREE_ONLY",
+              policy: "PREFERRED_FREE",
               note: "frozen posture",
             });
           }
@@ -231,6 +231,28 @@ describe("renderer isolation contract (kept from D1)", () => {
     // No inline event handlers: behaviour is attached from the script.
     expect(html).not.toMatch(/\bon\w+\s*=\s*["']/);
   });
+
+  it("the model picker never drops the active selection (no silent fallback)", () => {
+    const src = renderer();
+    // The native select stays the source of truth the run path reads verbatim.
+    expect(src).toContain('el("model-select")');
+    // A pick that an active cost filter would hide is pinned back in, so the
+    // model the user chose can only change when the user changes it.
+    expect(src).toContain("(current) ");
+    // Live search + the optional cost filter + refresh are all wired.
+    expect(src).toContain("model-search");
+    expect(src).toContain("model-cost-filter");
+    expect(src).toContain("model-refresh");
+  });
+
+  it("the model picker exposes real provider-connection status, not fake states", () => {
+    const src = renderer();
+    // The status line is read straight from the engine's registration state.
+    expect(src).toContain("listModelProviders");
+    expect(src).toContain("getSelectionPosture");
+    const html = read(join("renderer", "index.html"));
+    expect(html).toContain('id="model-status"');
+  });
 });
 
 describe("the new channels are enumerated end to end", () => {
@@ -268,7 +290,7 @@ describe("listModels", () => {
     const posture = f.selectionPosture();
     expect(posture.egress).toBe("deny-all");
     expect(posture.budgetUsd).toBe(0);
-    expect(posture.policy).toBe("FREE_ONLY");
+    expect(posture.policy).toBe("PREFERRED_FREE");
     expect(posture.note.length).toBeGreaterThan(0);
   });
 });

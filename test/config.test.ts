@@ -48,12 +48,16 @@ describe("config layering", () => {
     expect(config.workflow.humanInTheLoop).toBe(true);
   });
 
-  it("never allows the MAIN_CODER binding to change", () => {
-    const config = loadConfig({
-      overrides: { mainCoder: { provider: "other", model: "other", fixed: false } },
+  it("allows the MAIN_CODER binding to be set (null means no default)", () => {
+    // No override: default is null — Atria is optional, not required.
+    const empty = loadConfig();
+    expect(empty.mainCoder).toBeNull();
+    // User-configured main coder is preserved; it is not re-frozen.
+    const configured = loadConfig({
+      overrides: { mainCoder: { provider: "s1", model: "Atria-Dawn-Preview", fixed: true } },
     });
-    expect(config.mainCoder.provider).toBe("s1");
-    expect(config.mainCoder.model).toBe("Atria-Dawn-Preview");
-    expect(config.mainCoder.fixed).toBe(true);
+    expect(configured.mainCoder?.provider).toBe("s1");
+    expect(configured.mainCoder?.model).toBe("Atria-Dawn-Preview");
+    expect(configured.mainCoder?.fixed).toBe(true);
   });
 });

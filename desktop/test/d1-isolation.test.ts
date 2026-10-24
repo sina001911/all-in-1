@@ -75,6 +75,89 @@ describe("main window hardening", () => {
     expect(main()).toMatch(/loadFile\(/);
     expect(main()).not.toMatch(/loadURL\(\s*["']https?:/);
   });
+
+  it("denies popups and refuses to navigate off the app", () => {
+    const src = main();
+    expect(src).toMatch(/setWindowOpenHandler\([\s\S]{0,80}?action:\s*["']deny["']/);
+    expect(src).toMatch(/on\(\s*["']will-navigate["']/);
+    expect(src).toMatch(/preventDefault\(\)/);
+  });
+
+  it("switches the webview tag off", () => {
+    expect(main()).toMatch(/webviewTag:\s*false/);
+  });
+
+  it("denies every browser permission request", () => {
+    const src = main();
+    expect(src).toMatch(/setPermissionRequestHandler\(/);
+    expect(src).toMatch(/setPermissionCheckHandler\(/);
+    expect(src).toMatch(/callback\(false\)/);
+  });
+});
+
+describe("renderer content security policy", () => {
+  const csp = (): string => {
+    const html = read(join("renderer", "index.html"));
+    // The value is double-quoted and is full of single quotes, so the capture
+    // must exclude only the double quote that terminates the attribute.
+    const match = html.match(
+      /http-equiv=["']Content-Security-Policy["'][\s\S]*?content="([^"]+)"/,
+    );
+    if (!match?.[1]) throw new Error("the renderer declares no Content-Security-Policy");
+    return match[1];
+  };
+
+  const directive = (name: string): string =>
+    csp()
+      .split(";")
+      .map((d) => d.trim())
+      .find((d) => d === name || d.startsWith(`${name} `)) ?? "";
+
+  it("keeps scripts same-origin only — no inline, no eval", () => {
+    // Pinned exactly, so widening this directive has to be a deliberate edit.
+    expect(directive("script-src")).toBe("script-src 'self'");
+    expect(csp()).not.toMatch(/'unsafe-eval'/);
+  });
+
+  it("gives the renderer no network capability at all", () => {
+    // The renderer reaches the core only through the contextBridge, which is
+    // IPC and not governed by CSP. It therefore needs no connect source, and
+    // this is what leaves an injected page with no channel to exfiltrate over.
+    expect(directive("connect-src")).toBe("connect-src 'none'");
+  });
+
+  it("closes the plugin, frame, worker and media sinks", () => {
+    for (const name of ["object-src", "frame-src", "worker-src", "media-src", "manifest-src"]) {
+      expect(directive(name)).toBe(`${name} 'none'`);
+    }
+  });
+
+  it("pins the document base and form target", () => {
+    expect(directive("base-uri")).toBe("base-uri 'none'");
+    expect(directive("form-action")).toBe("form-action 'none'");
+  });
+
+  it("omits the directives a <meta> policy cannot deliver", () => {
+    // Chromium ignores frame-ancestors (and report-uri/sandbox) when the policy
+    // arrives in a <meta> element, and logs a warning on every startup. Keeping
+    // one here would be configuration that reads like protection while
+    // enforcing nothing, so the absence is pinned instead. The equivalent
+    // control is structural: no webview, no frame, and main denies popups and
+    // off-app navigation.
+    for (const ignored of ["frame-ancestors", "report-uri", "sandbox"]) {
+      expect(directive(ignored)).toBe("");
+    }
+  });
+
+  it("holds the invariants that make script-src 'self' sufficient", () => {
+    const html = read(join("renderer", "index.html"));
+    // Exactly one script element, and it is a same-origin file reference.
+    const scripts = [...html.matchAll(/<script\b[^>]*>/g)].map((m) => m[0]);
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]).toMatch(/src=["']renderer\.js["']/);
+    // No inline event-handler attribute anywhere in the markup.
+    expect(html).not.toMatch(/\son[a-z]+\s*=/);
+  });
 });
 
 describe("renderer page", () => {

@@ -2,7 +2,8 @@
  * D1 frozen-defaults and independence tests.
  *
  * Proves the desktop stack boots in the exact inert posture the core ships:
- * deny-all egress, zero budget, no remote adapter, MAIN_CODER immutable, and no
+ * deny-all egress, zero budget, no remote adapter, no phantom Atria binding
+ * (mainCoder is null by default — Atria is optional, never required), and no
  * OpenCode dependency anywhere in the runtime graph.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
@@ -57,11 +58,8 @@ describe("frozen desktop posture", () => {
   it("exposes the frozen defaults unchanged", () => {
     const s = stack();
     expect(s.frozenDefaults).toEqual(FROZEN_DEFAULTS);
-    expect(s.frozenDefaults.mainCoder).toEqual({
-      provider: "s1",
-      model: "Atria-Dawn-Preview",
-      fixed: true,
-    });
+    // mainCoder is intentionally null by default — Atria is optional.
+    expect(s.frozenDefaults.mainCoder).toBeNull();
     expect(s.frozenDefaults.cost.spendBudgetUsd).toBe(0);
     expect(s.frozenDefaults.cost.unknownPricing).toBe("premium");
     expect(s.frozenDefaults.workflow.humanInTheLoop).toBe(true);
@@ -79,6 +77,29 @@ describe("frozen desktop posture", () => {
 
   it("cannot reserve against the frozen zero budget", () => {
     expect(stack().budget.reserve(0.01)).toBe(false);
+  });
+
+  it("starts normally without Atria configured (no phantom binding)", () => {
+    // The frozen default has mainCoder: null. The stack must boot cleanly:
+    // no crashes, no missing-provider errors on the registry, and the local
+    // agent remains the only runner path.
+    const s = stack();
+    expect(s.frozenDefaults.mainCoder).toBeNull();
+    // No Atria provider was registered — the adapter list stays at local only.
+    const ids = s.core.stack.adapters.list().map((a) => a.id);
+    expect(ids).toEqual(["local"]);
+    // The router cannot resolve MAIN_CODER because no fixed binding exists.
+    // This is expected: the router throws; the stack itself is healthy.
+    const models = new ModelRegistry();
+    registerStubs(models);
+    const approvals = new ApprovalStore();
+    const budget = new BudgetLedger(0);
+    const router = new ModelRouter({ registry: models, approvals, budget });
+    expect(() => router.resolve({ role: "MAIN_CODER" })).toThrow(/MAIN_CODER/);
+    // The facade surfaces the null mainCoder without throwing.
+    const facade = new DesktopFacade(s);
+    const frozen = facade.getFrozenDefaults();
+    expect(frozen.mainCoder).toBeNull();
   });
 
   it("reports the inert posture through the facade", () => {

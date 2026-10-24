@@ -7,7 +7,7 @@
  *
  * Cost model: the vision layer does NOT have its own pricing logic. A vision
  * model is selected through the existing ModelRouter on the VISION role, so
- * the frozen FREE_ONLY / spendBudgetUsd = 0 / UNKNOWN_COST rules apply
+ * the frozen PREFERRED_FREE / spendBudgetUsd = 0 / UNKNOWN_COST rules apply
  * unchanged. The only provider registered in the MVP is the deterministic
  * fake, which is genuinely zero-cost and needs no credentials.
  *

@@ -2,8 +2,41 @@
 <html lang="en" data-theme="system">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'" />
-  <title>all_in_1 — Desktop</title>
+  <!--
+    Content Security Policy (D31).
+
+    The renderer is the untrusted surface: it renders model output and tool
+    results. The original policy set only `default-src 'self'` and a style
+    source, which left the exfiltration and plugin sinks at their defaults.
+    This one names every sink the page actually uses and closes the rest.
+
+    - `script-src 'self'` — one bundled same-origin script; no inline script and
+      no inline event handlers exist in this page.
+    - `style-src 'self' 'unsafe-inline'` — the design-token block is inline and
+      the markup carries inline `style` attributes. Script execution stays
+      blocked, so this does not widen the XSS surface.
+    - `connect-src 'none'` — the renderer reaches the core ONLY through the
+      contextBridge (`window.allInOne`), which is IPC and not governed by CSP.
+      It needs no network capability at all, so a successful injection has no
+      channel to send anything out.
+    - `img-src`/`font-src` `'self'` — the stylesheet uses system fonts and no
+      `url()`; no remote asset is referenced anywhere.
+    - `base-uri`/`form-action` `'none'` — there is no `<base>` and no form in
+      this page, so nothing legitimate is lost.
+    - `frame-ancestors` is deliberately ABSENT. A `<meta>`-delivered policy
+      cannot carry it — Chromium ignores the directive and logs a warning on
+      every startup — and it cannot be delivered as a header either, because
+      `loadFile()` serves a `file://` URL that `webRequest` never sees. Writing
+      it here would be configuration that reads like protection while
+      enforcing nothing. The equivalent control is structural instead:
+      `webviewTag: false`, no frame anywhere in the page, and the main process
+      denying both popups and off-app navigation.
+  -->
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; media-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'"
+  />
+  <title>AI1 — Desktop</title>
   <style>
     /* ===================================================================
        DESIGN TOKENS (M1)
@@ -23,9 +56,10 @@
       --fg-faint: #8b94a3;
       --border: #dde2ea;
       --border-strong: #c3cad6;
-      --accent: #2f6fd0;
+      --accent: #b8712f;
       --accent-fg: #ffffff;
-      --accent-soft: #e8f0fc;
+      --accent-soft: #fbe9dc;
+      --accent-glow: rgba(184, 113, 47, .18);
       --ok: #1f7a4d;
       --ok-soft: #e6f4ec;
       --warn: #9a6a12;
@@ -49,6 +83,10 @@
       --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       --font-mono: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
     }
+    /* RTL: the Farsi stack replaces the Latin one when the document flips. */
+    [data-dir="rtl"] {
+      --font-sans: "Segoe UI", "Tahoma", system-ui, sans-serif;
+    }
     [data-theme="dark"] {
       --surface-0: #0f141b;
       --surface-1: #151b24;
@@ -60,9 +98,10 @@
       --fg-faint: #66707e;
       --border: #232b37;
       --border-strong: #313b49;
-      --accent: #5b9cf0;
+      --accent: #d9914a;
       --accent-fg: #0f141b;
-      --accent-soft: #17253a;
+      --accent-soft: #2a2013;
+      --accent-glow: rgba(217, 145, 74, .18);
       --ok: #4db380;
       --ok-soft: #14251d;
       --warn: #d9a441;
@@ -75,7 +114,6 @@
       --shadow-1: 0 1px 2px rgba(0, 0, 0, .30);
       --shadow-2: 0 4px 14px rgba(0, 0, 0, .40);
     }
-
     /* ===================================================================
        BASE
        =================================================================== */
@@ -155,6 +193,18 @@
       margin-left: auto; font-size: 10.5px; color: var(--fg-muted);
       background: var(--surface-2); border-radius: 999px; padding: 1px 6px;
     }
+    .nav-group { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+    .nav-group summary { list-style: none; }
+    .nav-group summary::-webkit-details-marker { display: none; }
+    .nav-group > summary .nav-item { border-radius: 0; }
+    .nav-group[open] > summary .nav-item { border-bottom: 1px solid var(--border); }
+    .nav-sub { display: grid; gap: 1px; padding: 1px; background: var(--surface-2); }
+    .nav-sub .nav-item {
+      border-radius: 0; justify-content: flex-start; padding-left: calc(var(--s3) + var(--s2));
+      font-size: 12px; color: var(--fg-muted);
+    }
+    .nav-sub .nav-item:hover { background: var(--surface-hover); color: var(--fg); }
+    .nav-sub .nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
     .sidebar-foot {
       margin-top: auto; padding: var(--s3);
       font-size: 11px; color: var(--fg-muted);
@@ -210,6 +260,16 @@
     }
     .seg button:last-child { border-right: 0; }
     .seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+    /* Model picker strip (chat composer): search + optional cost filter + a
+       refresh affordance, and a live line that states provider connection and
+       the frozen selection posture honestly. */
+    .model-picker { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+    .model-picker .picker-search { flex: 1 1 150px; min-width: 130px; }
+    .model-picker .btn-refresh { flex: 0 0 auto; white-space: nowrap; }
+    .model-status { font-size: 12px; color: var(--fg-muted); min-height: 16px; margin: var(--s1) 0 var(--s2); }
+    .model-status .st-ok { color: var(--ok); font-weight: 600; }
+    .model-status .st-warn { color: var(--warn); font-weight: 600; }
 
     .card {
       background: var(--surface-1); border: 1px solid var(--border);
@@ -324,6 +384,91 @@
     }
 
     /* ===================================================================
+       CHAT / COMPARE / COLLAB (M3)
+       =================================================================== */
+    .chat-scroll {
+      flex: 1 1 auto; min-height: 0; overflow-y: auto;
+      display: flex; flex-direction: column; gap: var(--s3);
+      padding: var(--s5) var(--s5) 0;
+    }
+    .chat-welcome { display: grid; gap: var(--s5); padding: var(--s6) var(--s5) 0; }
+    .welcome-hero { display: grid; gap: var(--s2); justify-items: center; text-align: center; padding: var(--s6) 0; }
+    .welcome-mark {
+      font-size: 48px; font-weight: 700; letter-spacing: -.04em;
+      color: var(--accent); line-height: 1;
+    }
+    .welcome-hero h1 { font-size: 22px; font-weight: 600; }
+    .welcome-hero p { margin: 0; max-width: 520px; }
+    .welcome-suggestions { display: flex; gap: var(--s2); flex-wrap: wrap; justify-content: center; }
+    .welcome-suggestions button {
+      font: inherit; font-size: 12.5px; padding: 7px 12px;
+      border: 1px solid var(--border-strong); background: var(--surface-1);
+      color: var(--fg); border-radius: var(--r-md); cursor: pointer;
+      transition: border-color .12s ease, background .12s ease;
+    }
+    .welcome-suggestions button:hover { border-color: var(--accent); color: var(--accent); }
+
+    .composer-wrap {
+      padding: var(--s3) var(--s5) var(--s5);
+      border-top: 1px solid var(--border);
+      background: var(--surface-1);
+    }
+    .composer { display: grid; gap: var(--s2); max-width: 920px; margin: 0 auto; }
+    .composer .textarea { min-height: 52px; resize: vertical; }
+    .composer-bar { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+
+    .compare-grid { display: grid; gap: var(--s3); grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+    .compare-col {
+      border: 1px solid var(--border); border-radius: var(--r-lg);
+      background: var(--surface-1); display: flex; flex-direction: column; min-width: 0;
+    }
+    .compare-col-head {
+      display: flex; align-items: center; gap: var(--s2);
+      padding: var(--s2) var(--s3); border-bottom: 1px solid var(--border);
+      font-size: 12px; font-weight: 600; color: var(--fg-strong);
+    }
+    .compare-col-body { padding: var(--s3); flex: 1 1 auto; min-height: 0; }
+    .compare-col-body pre { margin: 0; font-family: var(--font-mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
+
+    .collab-steps { display: grid; gap: var(--s3); }
+    .collab-step {
+      border: 1px solid var(--border); border-radius: var(--r-lg);
+      background: var(--surface-1); padding: var(--s3);
+    }
+    .collab-participants { display: grid; gap: var(--s2); margin: var(--s2) 0; }
+    .collab-participant-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr 1.5fr 28px;
+      gap: var(--s2);
+      align-items: center;
+    }
+    .collab-participant-row .btn-remove {
+      width: 24px; height: 24px; border-radius: var(--r-md);
+      border: 1px solid var(--border); background: var(--surface-2);
+      color: var(--fg-muted); cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 14px; line-height: 1;
+    }
+    .collab-participant-row .btn-remove:hover { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+    .collab-participant-row .field { margin: 0; }
+    .collab-participant-row .field > span { font-size: 11px; color: var(--fg-muted); display: block; margin-bottom: 2px; }
+    .collab-step-head { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s2); }
+    .collab-step-num {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--surface-2); color: var(--fg-muted);
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 600;
+    }
+    .collab-step.running .collab-step-num { background: var(--accent-soft); color: var(--accent); }
+    .collab-step.done .collab-step-num { background: var(--ok-soft); color: var(--ok); }
+    .collab-step.error .collab-step-num { background: var(--danger-soft); color: var(--danger); }
+    .collab-step-roles { display: flex; gap: var(--s2); flex-wrap: wrap; margin-top: var(--s2); }
+    .collab-step-role {
+      font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      background: var(--surface-2); color: var(--fg-muted); border: 1px solid var(--border);
+    }
+
+    /* ===================================================================
        RESPONSIVE + MOTION (M1)
        =================================================================== */
     @media (max-width: 900px) {
@@ -349,63 +494,92 @@
 <body>
   <div class="shell">
     <header class="topbar">
-      <div class="brand">all_in_1 <small>D6</small></div>
+      <div class="brand"><span id="brand-mark">AI1</span> <small>desktop</small></div>
       <div class="posture grow" id="posture" aria-live="polite">loading…</div>
       <div class="seg" role="group" aria-label="Colour theme">
         <button type="button" id="theme-light" aria-pressed="false">Light</button>
         <button type="button" id="theme-dark" aria-pressed="false">Dark</button>
         <button type="button" id="theme-system" aria-pressed="true">System</button>
       </div>
+      <select id="lang-select" class="select" aria-label="Language" style="font-size:11.5px;padding:3px 6px">
+        <option value="en">English</option>
+        <option value="fa">فارسی</option>
+      </select>
     </header>
 
     <div class="app">
       <aside class="sidebar">
         <nav class="nav" id="nav" aria-label="Primary">
-          <button type="button" class="nav-item" data-view="agent" aria-current="page"><span class="nav-label">Agent</span></button>
-          <button type="button" class="nav-item" data-view="runs"><span class="nav-label">Runs</span></button>
-          <button type="button" class="nav-item" data-view="tools"><span class="nav-label">Tools</span></button>
-          <button type="button" class="nav-item" data-view="approvals"><span class="nav-label">Approvals</span><span class="nav-count" id="nav-approvals" hidden>0</span></button>
-          <button type="button" class="nav-item" data-view="audit"><span class="nav-label">Audit</span></button>
-          <button type="button" class="nav-item" data-view="models"><span class="nav-label">Models</span></button>
-          <button type="button" class="nav-item" data-view="workspace"><span class="nav-label">Workspace</span></button>
-          <button type="button" class="nav-item" data-view="settings"><span class="nav-label">Settings</span></button>
+          <button type="button" class="nav-item" data-view="chat" aria-current="page"><span class="nav-label" data-en="New Chat" data-fa="مکالمه جدید">New Chat</span></button>
+          <details class="nav-group" open>
+            <summary class="nav-item"><span class="nav-label" data-en="Workspaces" data-fa="فضاهای کاری">Workspaces</span></summary>
+            <div class="nav-sub" id="nav-workspaces"></div>
+          </details>
+          <details class="nav-group">
+            <summary class="nav-item"><span class="nav-label" data-en="Conversations" data-fa="تاریخچه">Conversations</span><span class="nav-count" id="nav-conversations" hidden>0</span></summary>
+            <div class="nav-sub" id="nav-conversations-list"></div>
+          </details>
+          <button type="button" class="nav-item" data-view="models"><span class="nav-label" data-en="Models &amp; Providers" data-fa="مدل‌ها و ارائه‌دهندگان">Models &amp; Providers</span></button>
+          <button type="button" class="nav-item" data-view="runs"><span class="nav-label" data-en="Runs / Tasks" data-fa="اجراها / وظایف">Runs / Tasks</span></button>
+          <button type="button" class="nav-item" data-view="tools"><span class="nav-label" data-en="Tools" data-fa="ابزارها">Tools</span></button>
+          <button type="button" class="nav-item" data-view="approvals"><span class="nav-label" data-en="Approvals" data-fa="تأییدها</span><span class="nav-count" id="nav-approvals" hidden>0</span></button>
+          <button type="button" class="nav-item" data-view="audit"><span class="nav-label" data-en="Activity" data-fa="فرآیند">Activity</span></button>
+          <button type="button" class="nav-item" data-view="settings"><span class="nav-label" data-en="Settings" data-fa=" تنظیمات">Settings</span></button>
         </nav>
         <div class="sidebar-foot" id="sidebar-foot"></div>
       </aside>
 
       <main class="main">
-        <!-- AGENT ------------------------------------------------------- -->
-        <section class="view active" id="view-agent" aria-labelledby="h-agent">
+        <!-- CHAT ------------------------------------------------------- -->
+        <section class="view active" id="view-chat" aria-labelledby="h-chat">
           <div class="view-head">
-            <h2 id="h-agent">Agent</h2>
-            <p class="grow" id="mode-help">—</p>
-            <div class="seg" role="group" aria-label="Safety mode">
-              <button type="button" id="mode-INSPECT" aria-pressed="true">INSPECT</button>
-              <button type="button" id="mode-SUGGEST" aria-pressed="false">SUGGEST</button>
-              <button type="button" id="mode-BUILD" aria-pressed="false">BUILD</button>
+            <h2 id="h-chat">Chat</h2>
+            <div class="grow"></div>
+            <div class="seg" role="group" aria-label="Execution mode">
+              <button type="button" id="mode-INSPECT" aria-pressed="true">Single</button>
+              <button type="button" id="mode-COMPARE" aria-pressed="false">Compare</button>
+              <button type="button" id="mode-COLLAB" aria-pressed="false">Collaborate</button>
             </div>
-            <label class="check"><input type="checkbox" id="agent-auto" /> auto (bounded)</label>
-            <label class="check"><input type="checkbox" id="agent-stream" checked /> stream response live</label>
           </div>
-          <div class="view-body stack">
-            <div class="row">
-              <label class="field"><span>Run id — reuse to continue</span>
-                <input class="input" type="text" id="agent-run-id" placeholder="(blank starts a new run)" size="28" />
-              </label>
-              <div class="grow"></div>
-              <span id="agent-state" aria-live="polite"></span>
-              <button type="button" class="btn" id="agent-cancel" disabled>Cancel</button>
+          <div class="view-body" id="chat-body">
+            <div class="chat-scroll" id="chat-scroll">
+              <div class="chat-welcome" id="chat-welcome">
+                <div class="welcome-hero">
+                  <div class="welcome-mark">AI1</div>
+                  <h1>Ask anything</h1>
+                  <p class="muted">Choose a model and how you want to work. Built-in local models work offline; add a provider for more.</p>
+                </div>
+                <div class="welcome-suggestions" id="welcome-suggestions"></div>
+              </div>
+              <div class="transcript" id="transcript" role="log" aria-live="polite" aria-label="Conversation transcript"></div>
             </div>
-            <div class="composer">
-              <label class="visually-hidden" for="agent-prompt">Prompt</label>
-              <textarea class="textarea" id="agent-prompt" rows="3" placeholder="Ask the agent…  (Enter to send, Shift+Enter for a new line)"></textarea>
-              <div class="row">
-                <button type="button" class="btn btn-primary" id="agent-run">Send</button>
-                <span class="faint" id="agent-hint"></span>
+            <div class="composer-wrap">
+              <div class="composer">
+                <label class="visually-hidden" for="agent-prompt">Message</label>
+                <textarea class="textarea" id="agent-prompt" rows="2" placeholder="Send a message…  (Enter to send, Shift+Enter for a new line)"></textarea>
+                <div class="model-picker">
+                  <input class="input picker-search" type="search" id="model-search" placeholder="Search model or provider…" aria-label="Search models" />
+                  <div class="seg" role="group" aria-label="Cost filter" id="model-cost-filter">
+                    <button type="button" aria-pressed="true" data-cost="all">All</button>
+                    <button type="button" aria-pressed="false" data-cost="FREE">Free</button>
+                    <button type="button" aria-pressed="false" data-cost="PAID">Paid</button>
+                  </div>
+                  <button type="button" class="btn btn-refresh" id="model-refresh" title="Re-read the model list and provider status">↻ Refresh</button>
+                </div>
+                <div class="model-status" id="model-status" role="status" aria-live="polite"></div>
+                <div class="composer-bar">
+                  <div class="grow"></div>
+                  <select id="model-select" class="select" aria-label="Model" style="max-width:220px"></select>
+                  <select id="exec-type" class="select" aria-label="Execution type" style="max-width:160px">
+                    <option value="single">Single model</option>
+                    <option value="compare">Compare models</option>
+                    <option value="collab">Collaborate</option>
+                  </select>
+                  <button type="button" class="btn btn-primary" id="agent-run">Send</button>
+                  <button type="button" class="btn" id="agent-cancel" disabled>Stop</button>
+                </div>
               </div>
             </div>
-            <div class="transcript" id="transcript" role="log" aria-live="polite" aria-label="Conversation transcript"></div>
-            <p class="faint" style="margin-top:var(--s2)">First run? Built-in local models work offline. For a real provider, go to Settings → Model providers, add the endpoint, then use Test config.</p>
             <div id="agent-first-run" class="card card-pad" style="display:none; margin-top:var(--s3)">
               <h3>First run</h3>
               <p class="muted" style="margin:var(--s2) 0">Start locally with deterministic models, or add a provider and test it before saving.</p>
@@ -414,6 +588,92 @@
                 <button type="button" class="btn" id="first-run-provider">Add provider</button>
                 <button type="button" class="btn" id="first-run-dismiss">Dismiss</button>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- COMPARE ----------------------------------------------------- -->
+        <section class="view" id="view-compare" aria-labelledby="h-compare">
+          <div class="view-head">
+            <h2 id="h-compare">Multi-Model Comparison</h2>
+            <p class="grow">Send the same request to several models at once. Each column is independent — one failure does not break the others.</p>
+            <button type="button" class="btn btn-primary" id="compare-start">Start comparison</button>
+          </div>
+          <div class="view-body stack">
+            <div class="card card-pad">
+              <h3>Request</h3>
+              <div class="row" style="margin-top:var(--s3)">
+                <label class="field grow"><span>Prompt</span><textarea class="textarea" id="cmp-prompt" rows="3" placeholder="What do you want the models to answer?"></textarea></label>
+              </div>
+              <div class="row" style="margin-top:var(--s3)">
+                <label class="field"><span>Concurrency</span><input class="input" type="number" id="cmp-concurrency" value="3" min="1" max="8" style="width:80px" /></label>
+                <label class="field"><span>Timeout (ms)</span><input class="input" type="number" id="cmp-timeout" value="30000" min="1000" style="width:100px" /></label>
+                <div class="grow"></div>
+                <label class="check"><input type="checkbox" id="cmp-stream" checked /> stream live</label>
+              </div>
+              <div id="cmp-models" class="stack" style="margin-top:var(--s3)"></div>
+            </div>
+            <div id="cmp-results" class="compare-grid"></div>
+          </div>
+        </section>
+
+        <!-- COLLAB ------------------------------------------------------ -->
+        <section class="view" id="view-collab" aria-labelledby="h-collab" role="region" aria-label="Collaboration">
+          <div class="view-head">
+            <h2 id="h-collab" data-en="Multi-Model Collaboration" data-fa="همکاری چندمدلی">Multi-Model Collaboration</h2>
+            <p class="grow" data-en="Pick every participant, a strategy, and an optional synthesis model. Each participant is an independent, fully-gated specialist run." data-fa="هر شرکت‌کننده، استراتژی و مدل سنتز اختیاری را انتخاب کنید. هر شرکت‌کننده یک اجرای متخصص مستقل است.">Pick every participant, a strategy, and an optional synthesis model. Each participant is an independent, fully-gated specialist run.</p>
+            <button type="button" class="btn btn-primary" id="collab-start" data-en="Start collaboration" data-fa="شروع همکاری">Start collaboration</button>
+          </div>
+          <div class="view-body stack">
+            <div class="card card-pad">
+              <h3 data-en="Recent Collaborations" data-fa="همکاری‌های اخیر">Recent Collaborations</h3>
+              <div id="collab-recent" class="stack" style="margin-bottom:var(--s2)"></div>
+              <button type="button" class="btn btn-ghost btn-sm" id="collab-refresh-recent" data-en="Refresh" data-fa="تازه‌سازی" aria-label="Refresh recent collaborations">Refresh</button>
+            </div>
+            <div class="card card-pad">
+              <h3 data-en="Task" data-fa="وظیفه">Task</h3>
+              <label class="field grow"><span data-en="Goal" data-fa="هدف">Goal</span><textarea class="textarea" id="collab-task" rows="3" placeholder="Describe the goal every participant works on, e.g. review the authentication module for security issues." data-ph-en="Describe the goal every participant works on..." data-ph-fa="هدفی که هر شرکت‌کننده روی آن کار می‌کند را توصیف کنید..." aria-label="Collaboration goal"></textarea></label>
+
+              <h4 style="margin:var(--s3) 0 var(--s2)" data-en="Participants" data-fa="شرکت‌کنندگان">Participants</h4>
+              <div id="collab-participants" class="collab-participants" aria-label="Participant list"></div>
+              <button type="button" class="btn btn-ghost" id="collab-add-participant" data-en="+ Add participant" data-fa="+ افزودن شرکت‌کننده" aria-label="Add participant">+ Add participant</button>
+
+              <div class="row" style="margin-top:var(--s3)">
+                <label class="field"><span data-en="Strategy" data-fa="استراتژی">Strategy</span>
+                  <select class="select" id="collab-strategy" aria-label="Execution strategy">
+                    <option value="parallel" data-en="Parallel — run together" data-fa="موازی — اجرای همزمان">Parallel — run together</option>
+                    <option value="sequential" data-en="Sequential — handoff" data-fa="پیوسته — تحویل">Sequential — handoff</option>
+                    <option value="debate" data-en="Debate — reconcile" data-fa="بحث — مصالحه">Debate — reconcile</option>
+                  </select>
+                </label>
+                <label class="field"><span data-en="Mode" data-fa="حالت">Mode</span>
+                  <select class="select" id="collab-mode" aria-label="Safety mode">
+                    <option value="INSPECT" data-en="INSPECT — read-only" data-fa="بازبینی — فقط خواندن">INSPECT — read-only</option>
+                    <option value="SUGGEST" data-en="SUGGEST — plan only" data-fa="پیشنهاد — فقط طرح">SUGGEST — plan only</option>
+                    <option value="BUILD" data-en="BUILD — may edit" data-fa="ساخت — ممکن است ویرایش کند">BUILD — may edit</option>
+                  </select>
+                </label>
+                <label class="check"><input type="checkbox" id="collab-stream" checked /><span data-en=" stream live" data-fa=" پخش زنده"> stream live</span></label>
+              </div>
+
+              <h4 style="margin:var(--s3) 0 var(--s2)" data-en="Synthesis (optional)" data-fa="سنتز (اختیاری)">Synthesis (optional)</h4>
+              <div class="row">
+                <label class="field grow"><span data-en="Provider" data-fa="ارائه‌دهنده">Provider</span>
+                  <input class="input" type="text" id="collab-synth-provider" placeholder="local" data-ph-en="local" data-ph-fa="محلی" aria-label="Synthesis provider" />
+                </label>
+                <label class="field grow"><span data-en="Model" data-fa="مدل">Model</span>
+                  <input class="input" type="text" id="collab-synth-model" placeholder="agent" data-ph-en="agent" data-ph-fa="عامل" aria-label="Synthesis model" />
+                </label>
+              </div>
+            </div>
+
+            <div id="collab-participant-cards" class="collab-steps" style="display:none" aria-label="Participant results" role="list"></div>
+            <div id="collab-disagreements" class="card card-pad" style="display:none" aria-label="Disagreements" role="region"></div>
+            <div id="collab-result" class="card card-pad" style="display:none" aria-label="Collaboration result" role="region">
+              <h3 data-en="Synthesis" data-fa="سنتز">Synthesis</h3>
+              <pre class="code" id="collab-result-text"></pre>
+              <h4 style="margin:var(--s3) 0 var(--s2)" class="muted" data-en="Contributions" data-fa="مشارکت‌ها">Contributions</h4>
+              <div id="collab-contribs" class="stack"></div>
             </div>
           </div>
         </section>

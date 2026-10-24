@@ -307,7 +307,7 @@ describe("the full agent loop on the real stack", () => {
 });
 
 describe("the frozen defaults still bind", () => {
-  it("without the agent model opted in, no tool-capable model is selectable", async () => {
+  it("without the agent model opted in, a non-tool model is still selectable when no tools are needed", async () => {
     const stack = buildSpecialistStack(); // agentModel defaults to false
     const gateway = new ProviderModelGateway({ engine: stack.stack.engine });
     const out = await gateway.turn({
@@ -317,6 +317,23 @@ describe("the frozen defaults still bind", () => {
       history: [],
       tools: [],
     });
+    // local/deterministic has tools:false, so it is selectable when no tools
+    // are needed — the gateway no longer hardcodes tools:true for every call.
+    expect(out.ok).toBe(true);
+    expect(out.text).toBeDefined();
+  });
+
+  it("without the agent model opted in, a tool-requiring call still fails", async () => {
+    const stack = buildSpecialistStack(); // agentModel defaults to false
+    const gateway = new ProviderModelGateway({ engine: stack.stack.engine });
+    const out = await gateway.turn({
+      runId: "g8",
+      prompt: "p",
+      mode: "INSPECT",
+      history: [],
+      tools: [{ name: "read_file", description: "Reads a file", input: {}, permission: "read" }],
+    });
+    // No tool-capable model is available — the agent model is not opted in.
     expect(out.ok).toBe(false);
     expect(out.error?.code).toBe("SELECTION_FAILED");
   });

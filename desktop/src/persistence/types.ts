@@ -25,9 +25,10 @@ export interface RunRecord {
   readonly id: string;
   /**
    * Which runtime produced this run (D27). Absent on records written before
-   * D27, which are workflow runs.
+   * D27, which are workflow runs. D34 adds `collab`: a multi-model
+   * collaboration whose participants are each a gated specialist run.
    */
-  readonly kind?: "workflow" | "agent";
+  readonly kind?: "workflow" | "agent" | "collab";
   readonly mode: string;
   readonly subject: string;
   readonly startedAt: number;
@@ -104,6 +105,13 @@ export interface DesktopSettings {
    * value, and every field is bounds-checked before it reaches the engine.
    */
   readonly providers: readonly SettingsProvider[];
+  /**
+   * User-configured spend budget in USD. The frozen default is 0 (no spend),
+   * which is what a fresh install ships with; the user may raise it from the
+   * Settings UI to permit paid models. Raising it is an explicit human act —
+   * nothing here raises a cost ceiling without the user typing a number.
+   */
+  readonly budgetUsd: number;
 }
 
 /** One model the user declared at a provider (D7). */
@@ -124,6 +132,11 @@ export interface SettingsProvider {
   readonly id: string;
   readonly displayName?: string;
   readonly endpoint: string;
+  /**
+   * Wire protocol. Defaults to `openai-compatible`; set to `anthropic` for an
+   * Anthropic Messages-compatible gateway such as the FCC local gateway.
+   */
+  readonly protocol?: string;
   /** Environment-variable NAME of the key, or null for a keyless local server. */
   readonly apiKeyEnv?: string | null;
   readonly models: readonly SettingsProviderModel[];
@@ -137,6 +150,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   theme: "system",
   defaultMode: "INSPECT",
   providers: [],
+  budgetUsd: 0,
 };
 
 export interface SettingsStore extends Persistable {
