@@ -19,6 +19,9 @@ import { writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildDesktopStack } from "./desktop-stack.ts";
 import { DesktopFacade } from "./facade.ts";
+import { JsonFileStore } from "./persistence/json-store.ts";
+import { resolveDataPaths } from "./persistence/paths.ts";
+import { MEDIA_CAPABILITIES, type MediaRequest } from "../../src/media/types.ts";
 import type { DesktopStack } from "./desktop-stack.ts";
 import { ElectronSafeStorageCredentialProvider } from "./credentials/electron-safe-storage.ts";
 import { applyPickedRoot } from "./workspace/pick.ts";
@@ -38,6 +41,9 @@ const RENDERER_URL = pathToFileURL(join(__dirname, "renderer", "index.html")).to
 
 function buildStack(): DesktopStack {
   const baseDir = app.getPath("userData");
+  // D1: sweep orphaned `.tmp` files left by a crashed writer before any store
+  // opens, so a torn temp never masquerades as a live store on the next boot.
+  JsonFileStore.recoverTmpFiles(resolveDataPaths(baseDir).root);
   return buildDesktopStack({
     baseDir,
     credentials: new ElectronSafeStorageCredentialProvider(
@@ -66,6 +72,25 @@ function registerHandlers(facade: DesktopFacade): void {
   );
   ipcMain.handle("all-in-1:run:cancel", (_e, runId: unknown) =>
     typeof runId === "string" ? facade.cancelRun(runId) : false,
+  );
+  // D35: run management — rename, delete, and search. The id is the run's own
+  // content-addressed key; a rename is cosmetic and a delete never touches the
+  // artifact store or the usage ledger.
+  ipcMain.handle("all-in-1:run:rename", (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("Invalid rename request");
+    const req = raw as Record<string, unknown>;
+    const runId = req.runId;
+    const name = req.name;
+    if (typeof runId !== "string" || typeof name !== "string") {
+      throw new Error("run:rename requires string runId and name");
+    }
+    return facade.renameRun(runId, name);
+  });
+  ipcMain.handle("all-in-1:run:delete", (_e, runId: unknown) =>
+    typeof runId === "string" ? facade.removeRun(runId) : false,
+  );
+  ipcMain.handle("all-in-1:run:search", (_e, query: unknown) =>
+    typeof query === "string" ? facade.searchRuns(query) : facade.searchRuns(""),
   );
   ipcMain.handle("all-in-1:approvals:list", () => facade.listApprovals());
   ipcMain.handle("all-in-1:approvals:grant", (_e, raw: unknown) => {
@@ -183,6 +208,103 @@ function registerHandlers(facade: DesktopFacade): void {
     if (picked.added) facade.patchSettings({ workspaceRoots: picked.roots });
     return picked;
   });
+  // D35: the artifact surface. The renderer lists, reads, and downloads by id;
+  // the id is content-addressed and regex-validated on the store side, so a
+  // crafted id cannot escape the artifact directory. The bytes never cross
+  // the bridge as a raw path — the renderer receives the payload and writes
+  // it itself, or main writes it for a download.
+  ipcMain.handle("all-in-1:artifacts:list", () => facade.listArtifacts());
+  ipcMain.handle("all-in-1:artifacts:read", (_e, raw: unknown) => {
+    if (typeof raw !== "string" || raw.trim() === "") throw new Error("artifact id must be a non-empty string");
+    return facade.getArtifact(raw);
+  });
+  ipcMain.handle("all-in-1:artifacts:download", async (_e, raw: unknown) => {
+    if (typeof raw !== "string" || raw.trim() === "") throw new Error("artifact id must be a non-empty string");
+    const payload = facade.downloadArtifact(raw);
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    if (!win) throw new Error("no focused window to download into");
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: "Save artifact",
+      defaultPath: payload.artifactId.replace(/\//g, "_"),
+      // The content type drives the extension; a malformed id never reaches
+      // here because the store rejected it first.
+      filters: [{ name: "All files", extensions: ["*"] }],
+    });
+    if (canceled || !filePath) return { savedTo: null };
+    require("node:fs").writeFileSync(filePath, Buffer.from(payload.bytes));
+    return { savedTo: filePath };
+  });
+  // D35: analyze an uploaded image. The renderer supplies the artifact id
+  // (never raw bytes); the facade reads the bytes from the store and routes
+  // the VISION role through the frozen PREFERRED_FREE policy.
+  ipcMain.handle("all-in-1:artifacts:analyze", async (_e, raw: unknown) => {
+    if (typeof raw !== "string" || raw.trim() === "") throw new Error("artifact id must be a non-empty string");
+    return facade.analyzeImage(raw);
+  });
+  // D35: analyze an uploaded file by content type. image/* routes through the
+  // VISION path; text/* is decoded and summarized locally; anything else is
+  // reported as binary. No external API is called for any branch.
+  ipcMain.handle("all-in-1:artifacts:analyze-file", async (_e, raw: unknown) => {
+    if (typeof raw !== "string" || raw.trim() === "") throw new Error("artifact id must be a non-empty string");
+    return facade.analyzeFile(raw);
+  });
+  // D35: the renderer may upload a file the user picked in the OS dialog.
+  // Main owns the dialog and the bytes; the renderer supplies nothing but
+  // the resulting id, and the store confines the write to paths.artifacts.
+  ipcMain.handle("all-in-1:upload:bytes", async (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("upload bytes must be an object");
+    const r = raw as { bytes?: unknown; name?: string };
+    if (!Array.isArray(r.bytes) && !(r.bytes instanceof Uint8Array)) {
+      throw new Error("upload bytes must be an array-like of bytes");
+    }
+    const bytes = new Uint8Array(r.bytes as ArrayLike<number>);
+    const name = typeof r.name === "string" && r.name.trim() ? r.name.trim() : "upload.bin";
+    const stored = facade.uploadFile({ bytes, contentType: "application/octet-stream", labels: { source: "browser-upload", name } });
+    return { artifactId: stored.artifactId, name };
+  });
+  ipcMain.handle("all-in-1:upload:file", async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    if (!win) throw new Error("no focused window to pick a file in");
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+      title: "Choose a file to upload",
+      buttonLabel: "Upload",
+      properties: ["openFile", "multiSelections"],
+      filters: [{ name: "All files", extensions: ["*"] }],
+    });
+    if (canceled || filePaths.length === 0) return { artifactId: null };
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const ids: string[] = [];
+    for (const filePath of filePaths) {
+      const bytes = new Uint8Array(fs.readFileSync(filePath));
+      const stored = facade.uploadFile({
+        bytes,
+        contentType: "application/octet-stream",
+        runId: `upload-${Date.now()}`,
+        labels: { originalName: path.basename(filePath) },
+      });
+      ids.push(stored.artifactId);
+    }
+    return { artifactId: ids[0] ?? null, artifactIds: ids };
+  });
+  // D35: collab progress. Pull-only, like every other channel here; the
+  // renderer polls this while a collaborate run is in flight so a long
+  // orchestration shows live participant status instead of a frozen card.
+  ipcMain.handle("all-in-1:collab:progress", (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("Invalid collab progress request");
+    const q = raw as Record<string, unknown>;
+    if (typeof q.runId !== "string") throw new Error("runId must be a string");
+    return facade.getCollabProgress(q.runId);
+  });
+  // D35: compare progress. A compare run is N independent gated agent runs
+  // under one batch id; the renderer polls this while a compare runs so a long
+  // batch shows per-model status instead of a frozen card. Pull-only.
+  ipcMain.handle("all-in-1:compare:progress", (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("Invalid compare progress request");
+    const q = raw as Record<string, unknown>;
+    if (typeof q.batchId !== "string") throw new Error("batchId must be a string");
+    return facade.getCompareProgress(q.batchId);
+  });
   // D4 agent runtime. The renderer drives a run and learns which tools the
   // mode permits; it approves nothing here — the two channels above are the
   // only answer an approval request can receive.
@@ -238,6 +360,45 @@ function registerHandlers(facade: DesktopFacade): void {
   // never crosses the boundary.
   ipcMain.handle("all-in-1:collab:run", (_e, raw: unknown) =>
     facade.runCollab(buildCollabRequest(raw)),
+  );
+  // P1-6: media generation. The media gate runs first (frozen media.enabled =
+  // false in the MVP); no credential is read, no transport is opened, until
+  // the user flips the gate and registers a provider with media capabilities.
+  ipcMain.handle("all-in-1:media:generate", async (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("Invalid media generate request");
+    const req = raw as Record<string, unknown>;
+    if (typeof req.capability !== "string" || !(MEDIA_CAPABILITIES as readonly string[]).includes(req.capability)) {
+      throw new Error(`capability must be one of: ${MEDIA_CAPABILITIES.join(", ")}`);
+    }
+    const runId = typeof req.runId === "string" ? req.runId : `media-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return facade.generateImage(
+      {
+        capability: req.capability as MediaRequest["capability"],
+        prompt: typeof req.prompt === "string" ? req.prompt : "",
+        referenceArtifactIds: Array.isArray(req.referenceArtifactIds)
+          ? (req.referenceArtifactIds as string[]).filter((x): x is string => typeof x === "string")
+          : undefined,
+        params: req.params && typeof req.params === "object"
+          ? (() => {
+              const p = req.params as Record<string, unknown>;
+              return {
+                aspectRatio: typeof p.aspectRatio === "string" ? p.aspectRatio : undefined,
+                resolution: Array.isArray(p.resolution) && p.resolution.length === 2
+                  ? [Number(p.resolution[0]), Number(p.resolution[1])]
+                  : undefined,
+                seed: typeof p.seed === "number" ? p.seed : undefined,
+              };
+            })()
+          : undefined,
+      },
+      runId,
+    );
+  });
+  // P1-6: cancel an in-flight media generation. The desktop stack owns the
+  // abort controller; this just triggers it. A cancelled attempt is never
+  // retried — the adapter throws a typed `cancelled` media error.
+  ipcMain.handle("all-in-1:media:cancel", (_e, runId: unknown) =>
+    typeof runId === "string" ? facade.cancelMediaRun(runId) : false,
   );
   ipcMain.handle("all-in-1:agent:stream", (_e, raw: unknown) => {
     if (!raw || typeof raw !== "object") throw new Error("Invalid stream query");

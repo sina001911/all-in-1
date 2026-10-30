@@ -93,7 +93,7 @@ export interface VisionProvider {
 
 /** Page-level analysis focus derived from an image, deterministically. */
 export function deriveFocus(imageBytes: Uint8Array): string[] {
-  const dims = pngDimensions(imageBytes);
+  const dims = imageDimensions(imageBytes);
   if (!dims) return ["defects"];
   const focus = new Set<string>();
   if (dims.width < 480) focus.add("responsiveness");
@@ -107,9 +107,17 @@ export function deriveFocus(imageBytes: Uint8Array): string[] {
 }
 
 /**
- * Read PNG dimensions from the IHDR chunk. Pure, dependency-free, and used to
- * enforce `maxImageEdge` before any bytes reach a provider.
+ * Read image dimensions from the file header. PNG is decoded from the IHDR
+ * chunk; JPEG and WebP are decoded from their own headers. Used to enforce
+ * `maxImageEdge` before any bytes reach a provider. Returns null when the
+ * format is unknown or the header cannot be parsed — the caller then falls
+ * back to the byte ceiling alone.
  */
+export function imageDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  return pngDimensions(bytes) ?? jpegDimensions(bytes) ?? webpDimensions(bytes);
+}
+
+/** PNG: 8-byte signature + IHDR chunk (length 4, type 4, width 4, height 4). */
 export function pngDimensions(bytes: Uint8Array): { width: number; height: number } | null {
   if (bytes.byteLength < 24) return null;
   // PNG signature: 89 50 4E 47 0D 0A 1A 0A
@@ -120,4 +128,79 @@ export function pngDimensions(bytes: Uint8Array): { width: number; height: numbe
   const height = view.getUint32(20);
   if (!width || !height) return null;
   return { width, height };
+}
+
+/**
+ * JPEG: scan SOFn markers (0xFF 0xC0..0xC3, 0xC5..0xC7, 0xC9..0xCB,
+ * 0xCD..0xCF) for the height/width pair. Returns null on a malformed or
+ * truncated header — the caller falls back to the byte ceiling.
+ */
+export function jpegDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  if (bytes.byteLength < 20 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  let i = 2;
+  while (i + 8 < bytes.byteLength) {
+    if (bytes[i] !== 0xff) {
+      // Standalone restart marker (0xD8/0xD9) or fill byte; skip one.
+      i++;
+      continue;
+    }
+    const marker = bytes[i + 1]!;
+    if (marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) break; // EOI / RSTn
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      i += 2;
+      continue;
+    }
+    const segLen = (bytes[i + 2]! << 8) | bytes[i + 3]!;
+    if (segLen < 8 || i + 2 + segLen > bytes.byteLength) return null;
+    // SOFn markers: 0xC0..0xC3, 0xC5..0xC7, 0xC9..0xCB, 0xCD..0xCF
+    if ((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7) ||
+        (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf)) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const height = view.getUint16(i + 5);
+      const width = view.getUint16(i + 7);
+      if (!width || !height) return null;
+      return { width, height };
+    }
+    i += 2 + segLen;
+  }
+  return null;
+}
+
+/**
+ * WebP: "RIFF"...."WEBP" then a chunk. VP8L (lossless) and VP8 (lossy) both
+ * carry the dimensions in their first few bytes; VP8X (extended) carries them
+ * at a fixed offset. Returns null on an unrecognized chunk.
+ */
+export function webpDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  if (bytes.byteLength < 30) return null;
+  if (bytes[0] !== 0x52 || bytes[1] !== 0x49 || bytes[2] !== 0x46 || bytes[3] !== 0x56) return null; // RIFF
+  if (bytes[8] !== 0x57 || bytes[9] !== 0x45 || bytes[10] !== 0x42 || bytes[11] !== 0x50) return null; // WEBP
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const fourCC = String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]);
+  if (fourCC === "VP8 ") {
+    // Lossy: frame tag (3 bytes) + start code 0x9d 0x01 0x2a + width(2) + height(2)
+    if (bytes.byteLength < 26) return null;
+    const width = view.getUint16(26) & 0x3fff;
+    const height = view.getUint16(28) & 0x3fff;
+    if (!width || !height) return null;
+    return { width, height };
+  }
+  if (fourCC === "VP8L") {
+    // Lossless: 1-byte signature + 14 bits width-1 + 14 bits height-1
+    if (bytes.byteLength < 25) return null;
+    if (bytes[20] !== 0x2f) return null;
+    const bits = view.getUint32(21);
+    const width = (bits & 0x3fff) + 1;
+    const height = ((bits >> 14) & 0x3fff) + 1;
+    if (!width || !height) return null;
+    return { width, height };
+  }
+  if (fourCC === "VP8X") {
+    // Extended: 24-bit width-1 and height-1 at fixed offsets
+    const width = (bytes[24] | (bytes[25] << 8) | (bytes[26] << 16)) + 1;
+    const height = (bytes[27] | (bytes[28] << 8) | (bytes[29] << 16)) + 1;
+    if (!width || !height) return null;
+    return { width, height };
+  }
+  return null;
 }

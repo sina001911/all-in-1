@@ -18,12 +18,26 @@
 import { WorkflowLoop } from "../../src/workflow/index.ts";
 import type { WorkflowResult } from "../../src/workflow/index.ts";
 import { CollaborateOrchestrator } from "../../src/collab/index.ts";
-import type { CollaborateRequest, CollaborateResult } from "./facade.ts";
+import type {
+  CollaborateParticipant,
+  CollaborateRequest,
+  CollaborateResult,
+  CollaborateSynthesis,
+} from "../../src/collab/types.ts";
+// Re-exported so the IPC seam (`ipc-requests.ts`) can name the participant
+// type without reaching back into the core from the desktop boundary.
+export type { CollaborateParticipant };
 import type { ModelRole } from "../../src/registry/roles.ts";
 import type { SafetyMode } from "../../src/safety/guard.ts";
 import type { ApprovalRecord } from "../../src/registry/approvals.ts";
 import type { BudgetSnapshot } from "../../src/registry/budget.ts";
 import type { DesktopStack } from "./desktop-stack.ts";
+import type {
+  ArtifactEntry,
+  ArtifactStore,
+  ReadArtifact,
+} from "../../src/artifacts/store.ts";
+import { type TextAnalyzer } from "../../src/vision/text-analyzer.ts";
 import type {
   DesktopSettings,
   LogRecord,
@@ -37,8 +51,10 @@ import type { ToolAuditRecord } from "../../src/tools/audit.ts";
 import type { ApprovalRecord as ToolApprovalEntry } from "./tools/approver.ts";
 import type { AgentRequest, AgentResult } from "../../src/agent/index.ts";
 import { toolsVisibleInMode } from "../../src/agent/index.ts";
+import { isAllInOneError } from "../../src/errors.ts";
 import { sanitizeProvider } from "./persistence/settings-store.ts";
 import { resolveBearerToken } from "../../src/execution/secrets.ts";
+import type { MediaRequest, MediaResult } from "../../src/media/types.ts";
 
 export interface DiagnosticRequest {
   readonly mode: SafetyMode;
@@ -84,65 +100,22 @@ export interface ManyModelResult {
   readonly escalated: boolean;
   readonly pausedForHuman: boolean;
   readonly runId: string;
+  /** D35: the batch id this slot belongs to. Carried so the renderer can poll
+   *  `getCompareProgress` without reconstructing it from the run ids. */
+  readonly batchId: string;
   readonly error?: { readonly code: string; readonly message: string };
 }
 
 /**
- * D34: the Collaborate request. Named (not inlined) so the IPC mapping in
- * `ipc-requests.ts` — the seam between the renderer's raw payload and the
- * facade — stays exercisable in CI, exactly like D29's `DiagnosticRequest`.
+ * D34: the Collaborate contracts. These are re-exported from the core
+ * (`src/collab/types.ts`) rather than re-declared: the desktop boundary is a
+ * consumer, not an owner, of the collaborate shape, and re-declaring it is how
+ * a field drifts out of sync with the orchestrator that actually enforces it.
+ * The IPC mapping in `ipc-requests.ts` — the seam between the renderer's raw
+ * payload and the facade — stays exercisable in CI, exactly like D29's
+ * `DiagnosticRequest`.
  */
-export interface CollaborateRequest {
-  /** The original task every participant works on. */
-  readonly task: string;
-  /** Two or more; one participant is not a collaboration. */
-  readonly participants: ReadonlyArray<{
-    readonly id: string;
-    readonly provider: string;
-    readonly modelId: string;
-    readonly role: string;
-    readonly task: string;
-    readonly streaming?: boolean;
-  }>;
-  readonly strategy: "parallel" | "sequential" | "debate";
-  /** Optional synthesis model; absent = concatenated answers, never a fallback. */
-  readonly synthesis?: { readonly provider: string; readonly modelId: string };
-  readonly mode: SafetyMode;
-  readonly auto?: boolean;
-  readonly timeoutMs?: number;
-  readonly streaming?: boolean;
-  /** Optional caller-supplied run id; generated when absent. */
-  readonly runId?: string;
-}
-
-export interface CollaborateSynthesis {
-  readonly text: string;
-  readonly modelId: string;
-  readonly provenance: ReadonlyArray<{ readonly participantId: string; readonly excerpt: string }>;
-}
-
-export interface CollaborateResult {
-  readonly ok: boolean;
-  readonly runId: string;
-  readonly strategy: string;
-  readonly participants: ReadonlyArray<{
-    readonly participant: CollaborateRequest["participants"][number];
-    readonly ok: boolean;
-    readonly structured: unknown;
-    readonly text: string;
-    readonly modelId: string;
-    readonly error?: { readonly code: string; readonly message: string; readonly retryable: boolean };
-  }>;
-  readonly synthesis?: CollaborateSynthesis;
-  readonly disagreements?: ReadonlyArray<{
-    readonly between: [string, string];
-    readonly field: string;
-    readonly a: string;
-    readonly b: string;
-    readonly resolution?: "a" | "b" | "merged" | "unresolved";
-  }>;
-  readonly error?: { readonly code: string; readonly message: string; readonly retryable: boolean };
-}
+export type { CollaborateRequest, CollaborateResult, CollaborateSynthesis };
 
 /**
  * One comparison batch. The request type is named (not inlined) so the IPC
@@ -298,6 +271,108 @@ export class DesktopFacade {
 
   getRun(id: string): RunRecord | undefined {
     return this.stack.runStore.get(id);
+  }
+
+  // ---- artifacts (D35) -----------------------------------------------
+
+  /** Every stored artifact, newest first. Read-only; the base path never leaves main. */
+  listArtifacts(): ReadonlyArray<ArtifactEntry> {
+    return this.stack.artifacts.list();
+  }
+
+  /** Read an artifact's bytes by id. The id is content-addressed and regex-validated on the store side. */
+  getArtifact(artifactId: string): ReadArtifact {
+    return this.stack.artifacts.read(artifactId);
+  }
+
+  /**
+   * Prepare an artifact for download. Returns the on-disk path AND a base64
+   * payload small enough to cross IPC without choking the main↔renderer
+   * bridge; large artifacts stream through the file path instead. The
+   * renderer never supplies the path — it receives one.
+   */
+  downloadArtifact(artifactId: string): { readonly artifactId: string; readonly path: string; readonly bytes: Uint8Array } {
+    const artifact = this.stack.artifacts.read(artifactId);
+    return { artifactId, path: artifact.path, bytes: artifact.bytes };
+  }
+
+  /**
+   * Persist a file the user picked in the OS dialog. The renderer supplies
+   * bytes + a content type + an optional run id; main owns the dialog and
+   * the store confines the write to paths.artifacts. The returned id is the
+   * content-addressed key the renderer uses for every later read/download.
+   */
+  uploadFile(input: {
+    readonly bytes: Uint8Array;
+    readonly contentType: string;
+    readonly runId?: string;
+    readonly labels?: Record<string, string>;
+  }): { readonly artifactId: string } {
+    const stored = this.stack.artifacts.store({
+      kind: "capture",
+      bytes: Buffer.from(input.bytes),
+      contentType: input.contentType,
+      runId: input.runId ?? `upload-${Date.now()}`,
+      labels: input.labels,
+    });
+    return { artifactId: stored.metadata.artifactId };
+  }
+
+  /**
+   * Analyze an uploaded image. The bytes come from the artifact store (the
+   * renderer never supplies raw bytes over IPC for anything but an explicit
+   * upload), so the id is the same one `uploadFile` returned. The VISION role
+   * routes through the frozen PREFERRED_FREE policy; a zero-budget install
+   * still analyzes for free via the deterministic fake. No credential is read.
+   */
+  async analyzeImage(artifactId: string): Promise<unknown> {
+    const artifact = this.stack.artifacts.read(artifactId);
+    const outcome = await this.stack.vision.analyze({
+      imageBytes: artifact.bytes,
+      mimeType: artifact.metadata.contentType,
+      sourceArtifactId: artifactId,
+    });
+    return outcome;
+  }
+
+  /**
+   * Analyze an uploaded file by content type. The bytes come from the artifact
+   * store (the renderer never supplies raw bytes over IPC for anything but an
+   * explicit upload), so the id is the same one `uploadFile` returned.
+   *
+   *   - image/*  → the VISION path (deterministic fake, zero budget);
+   *   - text/*  → local decode + summary, no network, no credential;
+   *   - anything else → reported as binary, never analyzed.
+   *
+   * No external API is called and no credential is read for any branch.
+   */
+  async analyzeFile(artifactId: string): Promise<unknown> {
+    const artifact = this.stack.artifacts.read(artifactId);
+    const ct = artifact.metadata.contentType.toLowerCase().split(";")[0]?.trim() ?? "";
+    if (ct.startsWith("image/")) {
+      return await this.stack.vision.analyze({
+        imageBytes: artifact.bytes,
+        mimeType: artifact.metadata.contentType,
+        sourceArtifactId: artifactId,
+      });
+    }
+    if (ct.startsWith("text/")) {
+      return this.stack.text.analyze({
+        bytes: artifact.bytes,
+        contentType: artifact.metadata.contentType,
+        sourceArtifactId: artifactId,
+      });
+    }
+    return {
+      provider: "local-text",
+      model: "text-decoder-1",
+      contentType: artifact.metadata.contentType,
+      charset: "binary",
+      bytes: artifact.metadata.bytes,
+      lines: 0,
+      summary: `${artifact.metadata.bytes} bytes of ${artifact.metadata.contentType} — not a decodable text or image; no analysis performed`,
+      warnings: ["content type is neither image/* nor text/*"],
+    };
   }
 
   /**
@@ -519,6 +594,35 @@ export class DesktopFacade {
   /** Abort a running diagnostic. Returns false when the run is not live. */
   cancelRun(runId: string): boolean {
     return this.stack.cancellation.cancel(runId);
+  }
+
+  // ---- run management (D35) -------------------------------------------
+
+  /**
+   * Rename a run. The display name is cosmetic: the pipeline keys off `id` and
+   * `subject`, so a rename never changes what a re-run does. Returns false when
+   * the run does not exist.
+   */
+  renameRun(runId: string, name: string): boolean {
+    return this.stack.runStore.rename(runId, name);
+  }
+
+  /**
+   * Delete a run record. Returns false when the run does not exist. Deleting a
+   * record does not delete its artifacts — the artifact store sweeps on its own
+   * retention schedule — and it does not touch the usage ledger, which keeps
+   * accounting for invocations that already happened.
+   */
+  removeRun(runId: string): boolean {
+    return this.stack.runStore.remove(runId);
+  }
+
+  /**
+   * Search runs by subject or display name. Case-insensitive substring match;
+   * an empty query returns every run, newest first, like `listRuns`.
+   */
+  searchRuns(query: string): readonly RunRecord[] {
+    return this.stack.runStore.search(query);
   }
 
   // ---- approvals ------------------------------------------------------
@@ -938,6 +1042,10 @@ export class DesktopFacade {
       id: request.runId,
       kind: "agent",
       mode: request.mode,
+      // D35: the model composite the run was asked to use. A compare slot
+      // carries it so a progress poll can label each card by the model it
+      // asked for; a run with no preference leaves it absent.
+      model: request.preference ? `${request.preference.provider}/${request.preference.modelId}` : undefined,
       // The Runs list labels the run by the prompt it opened with; a steering
       // prompt on a continuation does not relabel the run.
       subject: continuation ? prior!.subject : agentSubject(request.prompt),
@@ -978,7 +1086,9 @@ export class DesktopFacade {
       this.stack.runStore.save();
       throw e;
     } finally {
-      this.stack.usageStore.save();
+      // `recordAgentOutcome` (success) and the `catch` block each save the
+      // usage store themselves, so a blanket save here would double-write on
+      // every settled turn. Release the cancellation slot either way.
       this.stack.cancellation.release(request.runId);
       // A cancelled run leaves any raised approval DANGLING: denial is the
       // conservative end state so no decision it raised can outlive it.
@@ -1059,6 +1169,7 @@ export class DesktopFacade {
             escalated: r.escalated,
             pausedForHuman: r.pausedForHuman,
             runId: s.runId,
+            batchId: base,
             error: r.error ? { code: r.error.code, message: r.error.message } : undefined,
           };
         } catch (e) {
@@ -1071,6 +1182,7 @@ export class DesktopFacade {
             escalated: false,
             pausedForHuman: false,
             runId: s.runId,
+            batchId: base,
             error: {
               code: err.code ?? "AGENT_FAILED",
               message: (err.message ?? "unknown error").slice(0, 280),
@@ -1084,6 +1196,154 @@ export class DesktopFacade {
     for (let w = 0; w < concurrency; w++) workers.push(worker());
     await Promise.all(workers);
     return results;
+  }
+
+  /**
+   * D35: live progress for a collaboration that is still in flight. The
+   * renderer polls this while a collab runs so a long orchestration shows
+   * live participant status instead of a frozen card. Pull-only, like every
+   * other read channel here; it never starts, cancels, or mutates a run.
+   */
+  getCollabProgress(runId: string): {
+    readonly runId: string;
+    readonly status: RunRecord["status"];
+    readonly participants: ReadonlyArray<{
+      readonly participantId: string;
+      readonly provider: string;
+      readonly modelId: string;
+      readonly ok: boolean | null;
+      readonly text: string | undefined;
+    }>;
+  } {
+    const record = this.stack.runStore.get(runId);
+    if (!record) {
+      return { runId, status: "running", participants: [] };
+    }
+    const envelope = this.stack.workflowStreamBridge.getSince(runId, 0);
+    const frames = envelope?.events ?? [];
+    const byParticipant = new Map<string, { ok: boolean | null; text: string | undefined }>();
+    for (const frame of frames) {
+      const pid = (frame as { participantId?: string }).participantId;
+      if (!pid) continue;
+      const prior = byParticipant.get(pid) ?? { ok: null, text: undefined };
+      const kind = (frame as { kind?: string }).kind;
+      // A `finish` frame means the participant's turn ended. For deterministic
+      // local models this is the terminal event; a remote provider may also
+      // emit `usage` afterwards, which is a stronger success signal. Either
+      // one marks the participant settled; neither is present until the turn
+      // actually ended, so a mid-flight participant stays null.
+      if (kind === "finish" || kind === "usage") {
+        byParticipant.set(pid, { ok: true, text: prior.text });
+      } else if (kind === "text" && typeof (frame as { text?: string }).text === "string") {
+        byParticipant.set(pid, { ok: prior.ok, text: (prior.text ?? "") + (frame as { text: string }).text });
+      }
+    }
+    const participants = record.participants
+      ? record.participants.map((p) => {
+          const live = byParticipant.get(p.id);
+          if (live) {
+            return {
+              participantId: p.id,
+              provider: p.provider,
+              modelId: p.modelId,
+              ok: live.ok,
+              text: live.text,
+            };
+          }
+          // No live stream frame for this participant. That is normal when
+          // the collaboration was not requested with `streaming`, because the
+          // orchestrator only tags frames with a participantId when streaming
+          // is on — without this fallback every settled non-streaming collab
+          // would report `ok: null` forever. Derive the outcome from the run's
+          // own status instead: a completed run means every declared
+          // participant settled, a failed or cancelled one means none did.
+          const settled = record.status === "completed";
+          return {
+            participantId: p.id,
+            provider: p.provider,
+            modelId: p.modelId,
+            ok: settled ? true : record.status === "running" ? null : false,
+            text: undefined,
+          };
+        })
+      : [];
+    return { runId, status: record.status, participants };
+  }
+
+  /**
+   * D35: live progress for a comparison that is still in flight. A compare run
+   * is N independent gated agent runs under one batch id; this maps each slot
+   * back to the model it asked for and the live stream it is streaming under,
+   * so a poll mid-flight shows per-model status instead of a frozen card.
+   * Pull-only, like every other read channel here.
+   *
+   * The batch id is the `base` passed to `runMany` (or generated there); the
+   * renderer learns it from the `runId` each slot carries on its result.
+   */
+  getCompareProgress(batchId: string): {
+    readonly batchId: string;
+    readonly status: "running" | "completed" | "failed";
+    readonly slots: ReadonlyArray<{
+      readonly runId: string;
+      readonly requestedModel: string;
+      readonly ok: boolean | null;
+      readonly text: string | undefined;
+      readonly error?: { readonly code: string; readonly message: string };
+    }>;
+  } {
+    // Every run whose id starts with the batch prefix is a slot of this batch.
+    const prefix = `${batchId}-`;
+    const slots = this.stack.runStore
+      .list()
+      .filter((r) => r.id.startsWith(prefix))
+      .map((r) => {
+        const envelope = this.stack.streamBridge.getSince(r.id, 0);
+        const frames = envelope?.events ?? [];
+        let ok: boolean | null = null;
+        let text: string | undefined;
+        let error: { code: string; message: string } | undefined;
+        // Stream frames are the live path; when streaming was not requested
+        // the bridge is empty and we fall back to the deliverable stored on
+        // the run record.
+        for (const frame of frames) {
+          const kind = (frame as { kind?: string }).kind;
+          if (kind === "finish" || kind === "usage") {
+            ok = true;
+          } else if (kind === "text" && typeof (frame as { text?: string }).text === "string") {
+            text = (text ?? "") + (frame as { text: string }).text;
+          }
+        }
+        if (envelope?.state === "failed") {
+          ok = false;
+          error = envelope.error;
+        }
+        if (r.status === "completed") ok = true;
+        if (r.status === "failed" || r.status === "cancelled") ok = false;
+        text = text ?? r.deliverable;
+        // A cancelled or failed run carries its typed code on the record even
+        // when the stream bridge has no error envelope to report.
+        if (!error && (r.status === "failed" || r.status === "cancelled") && r.errorCode) {
+          error = { code: r.errorCode, message: r.errorCode };
+        }
+        return {
+          runId: r.id,
+          // The run record's `model` is the composite the slot was asked for;
+          // a compare slot always carries one. Fall back to the subject only
+          // when the record genuinely has neither, and never to `undefined` —
+          // the renderer labels each card by what it asked for, and
+          // "undefined" is not a label.
+          requestedModel: r.model ?? (r.subject ? r.subject : "—"),
+          ok,
+          text,
+          error,
+        };
+      });
+    const status: "running" | "completed" | "failed" =
+      slots.length === 0 ? "running"
+      : slots.every((s) => s.ok === true) ? "completed"
+      : slots.some((s) => s.ok === false) ? "failed"
+      : "running";
+    return { batchId, status, slots };
   }
 
   /**
@@ -1114,6 +1374,11 @@ export class DesktopFacade {
       iterations: request.participants.length,
       pausedForHuman: false,
       escalated: false,
+      participants: request.participants.map((p) => ({
+        id: p.id,
+        provider: p.provider,
+        modelId: p.modelId,
+      })),
     });
 
     if (streaming) this.stack.workflowStreamBridge.start(runId);
@@ -1127,22 +1392,20 @@ export class DesktopFacade {
     try {
       result = await new CollaborateOrchestrator({
         runner: this.stack.core.runner,
-        request: { ...request, runId, signal },
-        onStreamEvent: streaming
-          ? (e) => appendEvent(e, e.participantId)
-          : undefined,
+        request: { ...request, runId, signal } as CollaborateRequest,
+        onStreamEvent: streaming ? appendEvent : undefined,
       }).run();
     } catch (e) {
-      const err = e as AllInOneError;
+      const err = isAllInOneError(e) ? e : null;
       result = {
         ok: false,
         runId,
         strategy: request.strategy,
         participants: [],
         error: {
-          code: err.code ?? "COLLAB_FAILED",
-          message: err.message,
-          retryable: err.retryable ?? false,
+          code: err?.code ?? "COLLAB_FAILED",
+          message: err?.message ?? (e instanceof Error ? e.message : String(e)),
+          retryable: err?.retryable ?? false,
         },
       };
     }
@@ -1214,12 +1477,42 @@ export class DesktopFacade {
     return lines.join("\n");
   }
 
+  // ---- media (P1-6) -------------------------------------------------
+
   /**
-   * D27: persist an agent run's outcome and the accounting for the turns this
-   * call settled. The run becomes visible in the Runs view, and its spend
-   * becomes visible in the usage store — the budget ledger was already charged
-   * by the engine, so this is what keeps the accounting and the ledger agreed.
+   * Generate media (image, video, …) through the gated router. The media
+   * gate runs BEFORE any provider lookup or transport call, so a disabled
+   * config short-circuits with MEDIA_DISABLED and no credential is ever read.
+   * Generated artifacts land in the content-addressed store; the renderer
+   * reads them back by id, never by path.
    */
+  async generateImage(req: MediaRequest, runId: string): Promise<MediaResult> {
+    // The renderer cannot pass an AbortSignal over IPC, so the desktop stack
+    // owns a per-call controller. Pull it here; if the human cancels the run
+    // mid-flight, the adapter aborts the fetch and the router releases the
+    // budget reservation. The controller is cleaned up whether the call
+    // succeeds, fails, or is cancelled.
+    const signal = this.stack.mediaSignals.signalFor(runId);
+    try {
+      return await this.stack.media.execute({ ...req, signal }, runId);
+    } finally {
+      // The controller is cleaned up whether the call succeeds, fails, or is
+      // cancelled — a throw here must not leak the AbortController.
+      this.stack.mediaSignals.cancel(runId);
+    }
+  }
+
+  /**
+   * D35: cancel an in-flight media generation. The desktop stack owns the
+   * abort controller; this just triggers it. A cancelled attempt is never
+   * retried — the adapter throws a typed `cancelled` media error and the
+   * router releases the budget reservation.
+   */
+  cancelMediaRun(runId: string): boolean {
+    return this.stack.mediaSignals.cancel(runId);
+  }
+
+  // ---- models & providers (D5) --------------------------------------
   private recordAgentOutcome(runId: string, result: AgentResult, aborted: boolean): void {
     const cancelled = aborted || result.error?.code === "AGENT_CANCELLED";
     const status: RunRecord["status"] = cancelled ? "cancelled" : result.ok ? "completed" : "failed";
@@ -1316,6 +1609,9 @@ export class DesktopFacade {
     readonly tools: boolean;
     /** Whether the descriptor advertises a streaming response (D11). */
     readonly streaming: boolean;
+    /** Capability ids this model may serve (D35). The selector shows these so
+     *  the human can see WHY a model is or is not offered for a role. */
+    readonly capabilities: readonly string[];
   }> {
     return this.stack.core.stack.catalog.snapshot().map((m) => ({
       id: m.id,
@@ -1329,6 +1625,7 @@ export class DesktopFacade {
       fixed: Boolean(m.fixed),
       tools: m.tools,
       streaming: m.streaming,
+      capabilities: m.capabilities,
     }));
   }
 

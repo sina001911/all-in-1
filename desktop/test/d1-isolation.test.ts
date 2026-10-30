@@ -151,10 +151,16 @@ describe("renderer content security policy", () => {
 
   it("holds the invariants that make script-src 'self' sufficient", () => {
     const html = read(join("renderer", "index.html"));
-    // Exactly one script element, and it is a same-origin file reference.
+    // Every script element is a same-origin file reference — no inline code,
+    // no remote URL. The renderer now loads as several classic scripts in
+    // dependency order (components → state → theme → i18n → renderer), which
+    // is still `script-src 'self'`: each one is a same-origin file.
     const scripts = [...html.matchAll(/<script\b[^>]*>/g)].map((m) => m[0]);
-    expect(scripts).toHaveLength(1);
-    expect(scripts[0]).toMatch(/src=["']renderer\.js["']/);
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const s of scripts) {
+      expect(s).toMatch(/src=["'][^"']+\.js["']/);
+      expect(s).not.toMatch(/src=["']https?:/);
+    }
     // No inline event-handler attribute anywhere in the markup.
     expect(html).not.toMatch(/\son[a-z]+\s*=/);
   });
@@ -173,7 +179,9 @@ describe("renderer page", () => {
   });
 
   it("escapes rendered content to avoid injecting markup", () => {
-    expect(renderer()).toContain("function esc(");
+    // The escaping path lives in the shared components module (B1 split), so
+    // assert it there rather than in the main renderer body.
+    expect(read(join("renderer", "components.js"))).toContain("function esc(");
   });
 });
 

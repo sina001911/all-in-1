@@ -9,9 +9,10 @@
  * path that would escape it is refused, mirroring the core's own artifact-store
  * traversal discipline.
  */
-import { writeFileSync, readFileSync, renameSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, renameSync, existsSync, unlinkSync, readdirSync } from "node:fs";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { ensureDir } from "./paths.ts";
+import { AllInOneError } from "../../../src/errors.ts";
 
 /**
  * Windows-safe atomic rename.
@@ -62,18 +63,31 @@ export class JsonFileStore<T> {
   }
 
   read(): T | undefined {
+    if (!existsSync(this.filePath)) return undefined;
+    let raw: string;
     try {
-      const raw = readFileSync(this.filePath, "utf8");
-      return JSON.parse(raw) as T;
-    } catch {
-      return undefined;
+      raw = readFileSync(this.filePath, "utf8");
+    } catch (e) {
+      throw new AllInOneError(
+        `Cannot read ${this.filePath}: ${e instanceof Error ? e.message : String(e)}`,
+        "PERSISTENCE_READ_FAILED",
+        "persistence",
+        { cause: e, retryable: true },
+      );
     }
-  }
-
-  /** Throw on unparseable content rather than silently returning undefined. */
-  readStrict(): T {
-    const raw = readFileSync(this.filePath, "utf8");
-    return JSON.parse(raw) as T;
+    try {
+      return JSON.parse(raw) as T;
+    } catch (e) {
+      // A file that exists but is not valid JSON is a torn or corrupted store,
+      // NOT a never-written one. Returning undefined would silently reset the
+      // settings/runs/usage/budget to defaults, losing data with no warning.
+      throw new AllInOneError(
+        `Corrupt JSON in ${this.filePath}: ${e instanceof Error ? e.message : String(e)}`,
+        "PERSISTENCE_CORRUPT",
+        "persistence",
+        { cause: e, retryable: false },
+      );
+    }
   }
 
   exists(): boolean {
@@ -82,7 +96,45 @@ export class JsonFileStore<T> {
 
   write(value: T): void {
     writeFileSync(this.tmpPath, JSON.stringify(value, null, 2), "utf8");
-    atomicRename(this.tmpPath, this.filePath);
+    try {
+      atomicRename(this.tmpPath, this.filePath);
+    } catch (e) {
+      // The rename failed after retries: the temp file is now an orphan that
+      // will never be consumed. Remove it so the next write starts clean and
+      // the directory does not accumulate stale `.tmp` files across restarts.
+      try {
+        unlinkSync(this.tmpPath);
+      } catch {
+        /* best-effort cleanup; the error below is the one that matters */
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Sweep orphaned `.tmp` files left by a crashed or killed writer. A temp
+   * file is only ever consumed by the rename that follows its write, so any
+   * `.tmp` present at startup is evidence of an interrupted write — safe to
+   * delete. The desktop stack calls this once on boot.
+   */
+  static recoverTmpFiles(dir: string): number {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return 0;
+    }
+    let recovered = 0;
+    for (const name of entries) {
+      if (!name.endsWith(".tmp")) continue;
+      try {
+        unlinkSync(join(dir, name));
+        recovered++;
+      } catch {
+        /* skip files we cannot remove */
+      }
+    }
+    return recovered;
   }
 
   update(fn: (current: T | undefined) => T): T {

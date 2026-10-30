@@ -23,6 +23,12 @@ export const IPC_CHANNELS = [
   "all-in-1:run:usage",
   "all-in-1:run:diagnostic",
   "all-in-1:run:cancel",
+  // D35: run management — rename, delete, and search. The id is the run's own
+  // content-addressed key; a rename is cosmetic and a delete never touches the
+  // artifact store or the usage ledger.
+  "all-in-1:run:rename",
+  "all-in-1:run:delete",
+  "all-in-1:run:search",
   "all-in-1:approvals:list",
   "all-in-1:approvals:grant",
   "all-in-1:approvals:revoke",
@@ -72,6 +78,44 @@ export const IPC_CHANNELS = [
   // D7: pull the catalogue a gateway advertises, without registering anything.
   "all-in-1:providers:discover",
   "all-in-1:workspace:pick",
+  // D35: the artifact surface. The renderer lists, reads, and downloads
+  // artifacts by id; it never sees the base path, only ids the facade hands
+  // back. The id is content-addressed and regex-validated on the store side,
+  // so a crafted id cannot escape the artifact directory.
+  "all-in-1:artifacts:list",
+  "all-in-1:artifacts:read",
+  "all-in-1:artifacts:download",
+  // D35: analyze an uploaded image. The renderer supplies the artifact id
+  // (never raw bytes); the facade reads the bytes from the store and routes
+  // the VISION role through the frozen PREFERRED_FREE policy.
+  "all-in-1:artifacts:analyze",
+  // D35: analyze an uploaded file by content type. image/* routes through the
+  // VISION path; text/* is decoded and summarized locally; anything else is
+  // reported as binary. No external API is called for any branch.
+  "all-in-1:artifacts:analyze-file",
+  // D35: the renderer may upload a file the user picked in the OS dialog.
+  // Main owns the dialog and the bytes; the renderer supplies nothing but
+  // the resulting id, and the store confines the write to paths.artifacts.
+  "all-in-1:upload:file",
+  // D35: the renderer may upload bytes it already has (a <input type=file>
+  // pick). The bytes cross the bridge as a plain array — never a path.
+  "all-in-1:upload:bytes",
+  // D35: collab progress. The renderer polls this while a collaborate run is
+  // in flight so a long orchestration shows live participant status instead
+  // of a frozen card. Pull-only, like every other channel here.
+  "all-in-1:collab:progress",
+  // D35: compare progress. A compare run is N independent gated agent runs
+  // under one batch id; the renderer polls this while a compare runs so a long
+  // batch shows per-model status instead of a frozen card. Pull-only.
+  "all-in-1:compare:progress",
+  // P1-6: generate media (images, video) through the gated router. The media
+  // gate is frozen (media.enabled = false in the MVP), so every call short-
+  // circuits before any provider lookup or transport call.
+  "all-in-1:media:generate",
+  // P1-6: cancel an in-flight media generation. The desktop stack owns the
+  // abort controller; this just triggers it. A cancelled attempt is never
+  // retried — the adapter throws a typed `cancelled` media error.
+  "all-in-1:media:cancel",
 ] as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[number];

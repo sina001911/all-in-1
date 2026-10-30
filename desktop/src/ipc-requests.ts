@@ -17,7 +17,12 @@
  */
 import { SAFETY_MODES, type SafetyMode } from "../../src/safety/guard.ts";
 import { MODEL_ROLES, type ModelRole } from "../../src/registry/roles.ts";
-import type { CollaborateRequest, DiagnosticRequest, ManyModelRequest } from "./facade.ts";
+import type {
+  CollaborateParticipant,
+  CollaborateRequest,
+  DiagnosticRequest,
+  ManyModelRequest,
+} from "./facade.ts";
 
 export function isSafetyMode(v: unknown): v is SafetyMode {
   return typeof v === "string" && (SAFETY_MODES as readonly string[]).includes(v);
@@ -75,7 +80,18 @@ export function buildManyRequest(raw: unknown): ManyModelRequest {
   const modelIds = Array.isArray(req.modelIds)
     ? (req.modelIds as unknown[]).filter((c): c is string => typeof c === "string")
     : [];
-  const out: ManyModelRequest = {
+  // The boundary type is readonly; the builder is mutable while it validates
+  // and casts only at the return, so a rejected field can never be half-set.
+  const out: {
+    prompt: string;
+    modelIds: string[];
+    batchId?: string;
+    mode?: SafetyMode;
+    auto?: ManyModelRequest["auto"];
+    timeoutMs?: number;
+    concurrency?: number;
+    streaming?: boolean;
+  } = {
     prompt: req.prompt,
     modelIds,
   };
@@ -102,7 +118,7 @@ export function buildManyRequest(raw: unknown): ManyModelRequest {
     out.concurrency = req.concurrency as number;
   }
   out.streaming = req.streaming === true;
-  return out;
+  return out as ManyModelRequest;
 }
 
 /**
@@ -127,7 +143,24 @@ export function buildCollabRequest(raw: unknown): CollaborateRequest {
   }
   if (!isSafetyMode(req.mode)) throw new Error(`Invalid mode: ${String(req.mode)}`);
 
-  const participants: CollaborateRequest["participants"] = [];
+  // The boundary type is readonly; the builder is mutable while it validates
+  // and casts only at the return, so a rejected field can never be half-set.
+  const out: {
+    task: string;
+    participants: CollaborateParticipant[];
+    strategy: "parallel" | "sequential" | "debate";
+    synthesis?: { readonly provider: string; readonly modelId: string };
+    mode: SafetyMode;
+    auto?: boolean;
+    timeoutMs?: number;
+    streaming?: boolean;
+    runId?: string;
+  } = {
+    task: req.task,
+    participants: [],
+    strategy: req.strategy as "parallel" | "sequential" | "debate",
+    mode: req.mode as SafetyMode,
+  };
   for (const entry of req.participants) {
     if (!entry || typeof entry !== "object") continue;
     const e = entry as Record<string, unknown>;
@@ -136,7 +169,7 @@ export function buildCollabRequest(raw: unknown): CollaborateRequest {
     if (typeof e.modelId !== "string" || e.modelId.trim() === "") throw new Error("participant modelId must be a non-empty string");
     if (typeof e.role !== "string" || !isModelRole(e.role)) throw new Error(`participant role must be a registered role, got ${String(e.role)}`);
     if (typeof e.task !== "string" || e.task.trim() === "") throw new Error("participant task must be a non-empty string");
-    participants.push({
+    out.participants.push({
       id: e.id,
       provider: e.provider,
       modelId: e.modelId,
@@ -145,16 +178,10 @@ export function buildCollabRequest(raw: unknown): CollaborateRequest {
       streaming: e.streaming === true,
     });
   }
-  if (participants.length < 2) {
+  if (out.participants.length < 2) {
     throw new Error("collaborate requires at least two valid participants");
   }
 
-  const out: CollaborateRequest = {
-    task: req.task,
-    participants,
-    strategy: req.strategy as "parallel" | "sequential" | "debate",
-    mode: req.mode as SafetyMode,
-  };
   if (req.synthesis && typeof req.synthesis === "object") {
     const s = req.synthesis as Record<string, unknown>;
     if (typeof s.provider === "string" && typeof s.modelId === "string") {
@@ -169,5 +196,5 @@ export function buildCollabRequest(raw: unknown): CollaborateRequest {
       ? req.runId
       : undefined;
   if (runId !== undefined) out.runId = runId;
-  return out;
+  return out as CollaborateRequest;
 }

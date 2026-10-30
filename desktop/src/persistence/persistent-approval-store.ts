@@ -25,7 +25,16 @@ export class PersistentApprovalStore extends ApprovalStore {
   ) {
     super();
     this.file = file;
-    const initial = hydrate ?? file?.read()?.records ?? [];
+    let initial: readonly ApprovalRecord[];
+    try {
+      initial = hydrate ?? file?.read()?.records ?? [];
+    } catch (e) {
+      // A corrupt approval store is not fatal: approvals are a convenience
+      // cache that the approver re-issues on demand. Surface the error and
+      // start fresh rather than silently dropping every prior approval.
+      console.error("approval store: starting fresh because the persisted file is unreadable", e);
+      initial = [];
+    }
     for (const record of initial) {
       super.grant(record);
     }

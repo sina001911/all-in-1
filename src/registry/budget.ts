@@ -15,6 +15,12 @@ export interface BudgetSnapshot {
 export class BudgetLedger {
   private reserved = 0;
   private spent = 0;
+  /**
+   * D35: media generation counter. Distinct from `spent` because a generation
+   * may cost nothing (free model) yet still consume a slot under
+   * `maxMediaGenerations`. Counted only on a settled, stored artifact.
+   */
+  private spentGenerations = 0;
   readonly budgetUsd: number;
 
   constructor(budgetUsd: number) {
@@ -47,6 +53,16 @@ export class BudgetLedger {
 
   remaining(): number {
     return Math.max(0, this.budgetUsd - this.reserved - this.spent);
+  }
+
+  /** Count one settled media generation against `maxMediaGenerations`. */
+  incrementGeneration(): void {
+    this.spentGenerations += 1;
+  }
+
+  /** The number of media generations settled so far. */
+  get spentGenerationsCount(): number {
+    return this.spentGenerations;
   }
 
   snapshot(): BudgetSnapshot {

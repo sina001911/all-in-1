@@ -48,6 +48,19 @@ export interface VisualConfig {
       readonly maxCostPerRunUsd: number;
       readonly maxModelCalls: number;
     };
+    /**
+     * D35: per-call resilience. `maxRetries` is the number of ADDITIONAL
+     * attempts after the first (so 1 = one retry, 2 = two retries).
+     * `retryDelayMs` is the base of a linear backoff; the actual delay for
+     * attempt N is `retryDelayMs * N`, capped at 30s. Both default to 0 in
+     * the frozen schema — a fresh install makes no retries — and the desktop
+     * stack raises them from Settings when the human opts into resilient
+     * generation. They are NOT cost controls: a retry costs nothing extra
+     * against the budget because the ledger commits only once, after the
+     * successful attempt.
+     */
+    readonly maxRetries: number;
+    readonly retryDelayMs: number;
   };
   readonly vision: {
     readonly provider: "openrouter";
@@ -95,6 +108,8 @@ export const FROZEN_DEFAULTS: VisualConfig = {
       maxCostPerRunUsd: 0,
       maxModelCalls: 0,
     },
+    maxRetries: 0,
+    retryDelayMs: 0,
   },
   vision: {
     provider: "openrouter",

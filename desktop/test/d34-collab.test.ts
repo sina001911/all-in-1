@@ -96,7 +96,10 @@ describe("buildCollabRequest — the collab:run boundary", () => {
   it("rejects fewer than two participants", () => {
     const req = validRequest();
     expect(() =>
-      buildCollabRequest({ ...req, participants: [req.participants[0]] }),
+      buildCollabRequest({
+        ...req,
+        participants: [(req.participants as Array<Record<string, unknown>>)[0]],
+      }),
     ).toThrow(/at least two participants/);
   });
 

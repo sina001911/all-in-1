@@ -14,6 +14,7 @@ import {
   type SettingsStore,
 } from "./types.ts";
 import { PROVIDER_PROTOCOLS } from "../../../src/providers/types.ts";
+import { MEDIA_CAPABILITIES } from "../../../src/media/types.ts";
 import { JsonFileStore } from "./json-store.ts";
 
 const ALLOWED_KEYS: readonly (keyof DesktopSettings)[] = [
@@ -22,6 +23,9 @@ const ALLOWED_KEYS: readonly (keyof DesktopSettings)[] = [
   "defaultMode",
   "providers",
   "budgetUsd",
+  "mediaEnabled",
+  "artifactRetentionDays",
+  "artifactKeepRuns",
 ];
 
 /** An environment-variable NAME only: uppercase, digits, underscore. Never a key value. */
@@ -57,6 +61,18 @@ function sanitizeModel(raw: unknown): SettingsProviderModel | undefined {
     const caps = raw.capabilities.filter((c) => typeof c === "string" && c.length > 0 && c.length <= 40);
     if (caps.length > 0) out.capabilities = caps as readonly string[];
   }
+  // D35: media capabilities. Only known capability ids are accepted, so a
+  // typo can never select an unintended media model.
+  if (Array.isArray(raw.mediaCapabilities)) {
+    const caps = raw.mediaCapabilities.filter(
+      (c) => typeof c === "string" && MEDIA_CAPABILITIES.includes(c as never),
+    );
+    if (caps.length > 0) out.mediaCapabilities = caps as readonly string[];
+  }
+  // D35: a declared per-generation cost. Bounded and non-negative so a typo can
+  // never reserve a billion dollars of budget. Absent means UNKNOWN.
+  const cost = finiteBounded(raw.costEstimateUsd, 0, 1_000_000);
+  if (cost !== undefined) out.costEstimateUsd = cost;
   const contextLimit = finiteBounded(raw.contextLimit, 1024, 4_000_000);
   if (contextLimit !== undefined) out.contextLimit = contextLimit;
   const outputLimit = finiteBounded(raw.outputLimit, 256, 1_000_000);
@@ -113,6 +129,12 @@ export function sanitizeProvider(raw: unknown): SettingsProvider | undefined {
   if (typeof raw.displayName === "string" && raw.displayName.trim().length > 0) {
     out.displayName = raw.displayName.trim().slice(0, 80);
   }
+  // D35: the image-generation path. Must start with a slash, be relative to
+  // the endpoint, and stay short — a typo can never redirect a generation to
+  // an unintended path.
+  if (typeof raw.imagePath === "string" && /^\/[A-Za-z0-9/_-]{1,120}$/.test(raw.imagePath.trim())) {
+    out.imagePath = raw.imagePath.trim();
+  }
   // A key VALUE is refused here: only an env-var NAME is accepted, and it must
   // match the name charset. Anything resembling a secret is dropped.
   if (typeof raw.apiKeyEnv === "string" && ENV_NAME.test(raw.apiKeyEnv.trim())) {
@@ -150,6 +172,10 @@ type MutableSettingsProviderModel = {
   id: string;
   displayName?: string;
   capabilities?: readonly string[];
+  /** D35: media capabilities declared for this model (TEXT_TO_IMAGE, etc.). */
+  mediaCapabilities?: readonly string[];
+  /** D35: declared per-generation cost in USD, when the user supplies one. */
+  costEstimateUsd?: number;
   contextLimit?: number;
   outputLimit?: number;
   tools?: boolean;
@@ -163,6 +189,8 @@ type MutableSettingsProvider = {
   endpoint: string;
   protocol?: string;
   apiKeyEnv?: string | null;
+  /** D35: image-generation path mounted under `endpoint` (e.g. `/images`). */
+  imagePath?: string;
   models: readonly SettingsProviderModel[];
   timeoutMs?: number;
   maxRetries?: number;
@@ -176,6 +204,7 @@ function sanitize(patch: Partial<DesktopSettings>): Partial<DesktopSettings> {
     defaultMode?: "INSPECT" | "SUGGEST" | "BUILD";
     providers?: readonly SettingsProvider[];
     budgetUsd?: number;
+    mediaEnabled?: boolean;
   } = {};
   for (const key of ALLOWED_KEYS) {
     if (key in patch) {
@@ -189,6 +218,12 @@ function sanitize(patch: Partial<DesktopSettings>): Partial<DesktopSettings> {
         // spend the user did not intend.
         const n = finiteBounded((patch as Record<string, unknown>).budgetUsd, 0, 1_000_000);
         if (n !== undefined) out.budgetUsd = n;
+      } else if (key === "mediaEnabled") {
+        // A boolean only. A non-boolean is dropped rather than coerced, so a
+        // typo can never silently enable media.
+        if (typeof (patch as Record<string, unknown>)[key] === "boolean") {
+          out.mediaEnabled = (patch as Record<string, unknown>)[key] as boolean;
+        }
       } else {
         (out as Record<string, unknown>)[key] = (patch as Record<string, unknown>)[key];
       }
@@ -203,7 +238,15 @@ export class FileSettingsStore implements SettingsStore {
 
   constructor(file: JsonFileStore<DesktopSettings>) {
     this.file = file;
-    const stored = file.read();
+    let stored: DesktopSettings | undefined;
+    try {
+      stored = file.read();
+    } catch (e) {
+      // A corrupt settings file is more consequential than a corrupt run
+      // store: it carries the provider list and the budget. Surface it and
+      // fall back to defaults rather than silently resetting on startup.
+      console.error("settings store: starting from defaults because the persisted file is unreadable", e);
+    }
     this.current = stored ? { ...DEFAULT_DESKTOP_SETTINGS, ...sanitize(stored) } : { ...DEFAULT_DESKTOP_SETTINGS };
   }
 

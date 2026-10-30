@@ -24,318 +24,6 @@
 (function () {
   "use strict";
 
-  var api = window.allInOne;
-
-  /* ==================================================================
-     Core helpers
-     ================================================================== */
-
-  function esc(v) {
-    return String(v).replace(/[&<>"]/g, function (c) {
-      return "&#" + c.charCodeAt(0) + ";";
-    });
-  }
-
-  function el(id) {
-    return document.getElementById(id);
-  }
-
-  function clear(node) {
-    while (node && node.firstChild) node.removeChild(node.firstChild);
-  }
-
-  function text(node, str) {
-    clear(node);
-    node.appendChild(document.createTextNode(String(str)));
-  }
-
-  /**
-   * Element builder. `props` understands `class`, `text`, `on`, `dataset` and
-   * any other attribute; children are appended as nodes. Never innerHTML.
-   */
-  function h(tag, props, kids) {
-    var node = document.createElement(tag);
-    if (props) {
-      for (var key in props) {
-        var value = props[key];
-        if (value === null || value === undefined) continue;
-        if (key === "class") node.className = value;
-        else if (key === "text") node.appendChild(document.createTextNode(String(value)));
-        else if (key === "on") {
-          for (var ev in value) node.addEventListener(ev, value[ev]);
-        } else if (key === "dataset") {
-          for (var dk in value) node.dataset[dk] = String(value[dk]);
-        } else node.setAttribute(key, String(value));
-      }
-    }
-    if (kids) {
-      for (var i = 0; i < kids.length; i++) {
-        if (kids[i]) node.appendChild(kids[i]);
-      }
-    }
-    return node;
-  }
-
-  function mono(value) {
-    return h("pre", { class: "code", text: value });
-  }
-
-  /* ==================================================================
-     Components
-     ================================================================== */
-
-  function Button(label, opts) {
-    opts = opts || {};
-    return h("button", {
-      type: opts.type || "button",
-      class: "btn" + (opts.variant ? " btn-" + opts.variant : "") + (opts.small ? " btn-sm" : ""),
-      "aria-label": opts.ariaLabel || null,
-      disabled: opts.disabled ? "disabled" : null,
-      on: { click: opts.onClick },
-      text: label,
-    });
-  }
-
-  function IconButton(label, title, onClick) {
-    return Button(label, { onClick: onClick, ariaLabel: title, variant: "ghost" });
-  }
-
-  function TextInput(id, opts) {
-    opts = opts || {};
-    return h("input", {
-      id: id,
-      type: "text",
-      class: "input",
-      value: opts.value || "",
-      placeholder: opts.placeholder || null,
-      size: opts.size || null,
-      on: opts.onInput ? { input: opts.onInput } : null,
-    });
-  }
-
-  function TextArea(id, opts) {
-    opts = opts || {};
-    return h("textarea", {
-      id: id,
-      class: "textarea",
-      rows: opts.rows || 3,
-      placeholder: opts.placeholder || null,
-      value: opts.value || "",
-    });
-  }
-
-  function Select(id, opts) {
-    opts = opts || {};
-    var node = h("select", {
-      id: id,
-      class: "select",
-      on: opts.onChange ? { change: opts.onChange } : null,
-    });
-    (opts.options || []).forEach(function (o) {
-      node.appendChild(h("option", { value: o.value, text: o.label }));
-    });
-    if (opts.value) node.value = opts.value;
-    return node;
-  }
-
-  function Checkbox(id, label, opts) {
-    opts = opts || {};
-    var input = h("input", {
-      id: id,
-      type: "checkbox",
-      on: opts.onChange ? { change: opts.onChange } : null,
-    });
-    return h("label", { class: "check", for: id }, [input, document.createTextNode(" " + label)]);
-  }
-
-  function Badge(label, tone) {
-    return h("span", { class: "badge" + (tone ? " badge-" + tone : ""), text: label });
-  }
-
-  function Panel(title, kids) {
-    var head = title ? h("h3", { text: title }) : null;
-    var box = h("div", { class: "card card-pad" });
-    if (head) box.appendChild(head);
-    var body = h("div", { class: "stack", style: "margin-top:var(--s3)" });
-    (kids || []).forEach(function (k) {
-      if (k) body.appendChild(k);
-    });
-    box.appendChild(body);
-    return box;
-  }
-
-  function Table(headers, rows) {
-    var thead = h("thead", null, [
-      h("tr", null, headers.map(function (label) {
-        return h("th", { scope: "col", text: label });
-      })),
-    ]);
-    var tbody = h("tbody", null, rows);
-    return h("div", { style: "overflow:auto;border:1px solid var(--border);border-radius:var(--r-md)" }, [
-      h("table", { class: "data" }, [thead, tbody]),
-    ]);
-  }
-
-  function EmptyState(message) {
-    return h("p", { class: "empty", text: message });
-  }
-
-  function SkeletonRow(count) {
-    var box = h("div", { class: "stack" }, []);
-    for (var i = 0; i < (count || 3); i++) {
-      box.appendChild(h("div", { class: "skeleton" }));
-    }
-    return box;
-  }
-
-  function ErrorPanel(code, message, onRetry) {
-    var kids = [
-      h("div", { class: "row" }, [
-        Badge("error", "danger"),
-        h("code", { text: code || "ERROR" }),
-      ]),
-      h("p", { class: "muted", style: "margin:0", text: message || "" }),
-    ];
-    if (onRetry) kids.push(Button("Retry", { onClick: onRetry, small: true }));
-    return h("div", { class: "error-panel stack" }, kids);
-  }
-
-  function RunStatePill(result) {
-    if (!result) return h("span", { class: "badge", text: "no run yet" });
-    if (result.escalated) return Badge("escalated", "warn");
-    if (result.pausedForHuman) return Badge("paused for you", "info");
-    if (result.ok) return Badge("ok", "ok");
-    return Badge((result.error && result.error.code) || "failed", "danger");
-  }
-
-  /* Toasts ------------------------------------------------------------- */
-  function toast(message, tone) {
-    var host = el("toasts");
-    if (!host) return;
-    var node = h("div", { class: "toast" + (tone ? " toast-" + tone : ""), text: message });
-    host.appendChild(node);
-    setTimeout(function () {
-      if (node.parentNode) node.parentNode.removeChild(node);
-    }, 4200);
-  }
-
-  /* Modal -------------------------------------------------------------- */
-  var modalState = { resolve: null, lastFocus: null };
-
-  function openModal(title, bodyNode, opts) {
-    opts = opts || {};
-    var backdrop = el("modal-backdrop");
-    text(el("modal-title"), title);
-    clear(el("modal-body"));
-    el("modal-body").appendChild(bodyNode);
-    el("modal-confirm").textContent = opts.confirmLabel || "Confirm";
-    el("modal-cancel").textContent = opts.cancelLabel || "Cancel";
-    modalState.lastFocus = document.activeElement;
-    backdrop.classList.add("open");
-    var focusable = el("modal-body").querySelector("input, textarea, select, button");
-    if (focusable && focusable.focus) focusable.focus();
-    return new Promise(function (resolve) {
-      modalState.resolve = resolve;
-    });
-  }
-
-  function closeModal(value) {
-    var backdrop = el("modal-backdrop");
-    if (backdrop) backdrop.classList.remove("open");
-    if (modalState.resolve) {
-      var r = modalState.resolve;
-      modalState.resolve = null;
-      r(value);
-    }
-    if (modalState.lastFocus && modalState.lastFocus.focus) modalState.lastFocus.focus();
-  }
-
-  /* Tabs --------------------------------------------------------------- */
-  function selectTab(which) {
-    var isTool = which === "tool";
-    el("tab-tool").setAttribute("aria-selected", isTool ? "true" : "false");
-    el("tab-log").setAttribute("aria-selected", isTool ? "false" : "true");
-    el("pane-tool").hidden = !isTool;
-    el("pane-log").hidden = isTool;
-  }
-
-  /* ==================================================================
-     State
-     ================================================================== */
-
-  var state = {
-    theme: "system",
-    settings: null,
-    view: "chat",
-    mode: "INSPECT",
-    // Kept ONLY while the last run is paused for the human (the D26 resume
-    // flow). Every other time it is "" and the next run gets a fresh id.
-    runId: "",
-    activeRunId: "", // the run in flight right now, live or not
-    busy: false,
-    lastResult: null,
-    lastRequestedModel: null, // the provider/model the human picked for it
-    selectedRunId: null,
-    runs: [],
-    pending: [],
-    firstRunDismissed: false,
-    lang: "en",
-    liveStream: null,
-    modelCatalog: [],
-    modelSearch: "",
-    modelCostFilter: "all",
-  };
-
-  var MODES = ["INSPECT", "SUGGEST", "BUILD"];
-
-  var MODE_HELP = {
-    INSPECT: "Read-only analysis. The model is never even shown a write, execute or network tool.",
-    SUGGEST: "Analysis and planning. No privileged tool is offered.",
-    BUILD: "Privileged tools are offered — files.write, files.edit, process.exec. Every one waits for your approval here.",
-  };
-
-  /* ==================================================================
-     Theme (M1)
-     ================================================================== */
-
-  function prefersDark() {
-    if (typeof window.matchMedia === "function") {
-      var q = window.matchMedia("(prefers-color-scheme: dark)");
-      return !!q && q.matches === true;
-    }
-    return false;
-  }
-
-  function resolveTheme(theme) {
-    if (theme === "dark") return "dark";
-    if (theme === "light") return "light";
-    return prefersDark() ? "dark" : "light";
-  }
-
-  /** Paint the resolved theme. `data-theme` is always the CONCRETE palette so
-   *  every token lookup resolves, never an unresolved "system". */
-  function paintTheme() {
-    var root = document.documentElement;
-    if (root) root.dataset.theme = resolveTheme(state.theme);
-    var resolved = resolveTheme(state.theme);
-    ["light", "dark", "system"].forEach(function (name) {
-      var btn = el("theme-" + name);
-      if (btn) btn.setAttribute("aria-pressed", state.theme === name ? "true" : "false");
-    });
-    var selectNode = el("settings-theme");
-    if (selectNode) selectNode.value = state.theme;
-  }
-
-  async function setTheme(theme) {
-    state.theme = theme;
-    paintTheme();
-    try {
-      state.settings = await api.patchSettings({ theme: theme });
-      toast("Theme set to " + theme, "ok");
-    } catch (e) {
-      toast("Could not save the theme: " + esc(e), "danger");
-    }
-  }
 
   /* ==================================================================
      Navigation (M2)
@@ -349,7 +37,7 @@
       if (item.getAttribute("data-view") === name) item.setAttribute("aria-current", "page");
       else item.removeAttribute("aria-current");
     }
-    var allViews = ["chat", "compare", "collab", "runs", "tools", "approvals", "audit", "models", "workspace", "settings"];
+    var allViews = ["chat", "compare", "collab", "runs", "tools", "approvals", "audit", "models", "workspace", "artifacts", "settings"];
     allViews.forEach(function (v) {
       var view = el("view-" + v);
       if (view) view.classList.toggle("active", v === name);
@@ -432,6 +120,58 @@
   function renderTranscript(result) {
     var host = el("transcript");
     clear(host);
+    // D35: an uploaded file produces a single turn-style card directly, not
+    // via the history array. Treat a top-level {body,label,contentType} as
+    // an ephemeral turn so the transcript is never empty after an upload.
+    if (result && result.kind === "uploaded") {
+      var card = h("div", { class: "card card-pad turn turn-system" }, [
+        h("div", { class: "turn-head" }, [Badge(result.label || "Upload")]),
+        result.contentType
+          ? h("div", { class: "mono faint", text: "type: " + result.contentType })
+          : null,
+        result.artifactId
+          ? h("div", { class: "mono faint", text: "artifact: " + result.artifactId })
+          : null,
+        h("pre", { class: "code", style: "margin-top:var(--s2)" }, [result.body || ""]),
+      ]);
+      host.appendChild(card);
+      host.scrollTop = host.scrollHeight;
+      return;
+    }
+    // P1-6: a generated image lands as a single turn-style card, like an upload.
+    if (result && result.kind === "generated") {
+      var gCard = h("div", { class: "card card-pad turn turn-system" }, [
+        h("div", { class: "turn-head" }, [Badge(result.label || "Generated")]),
+        result.artifactId
+          ? h("div", { class: "mono faint", text: "artifact: " + result.artifactId })
+          : null,
+      ]);
+      if (result.artifactId) {
+        gCard.appendChild(
+          h("img", {
+            src: "all-in-1:artifacts:read/" + result.artifactId,
+            style: "max-width:100%;border-radius:var(--radius);margin-top:var(--s2)",
+            alt: "Generated image",
+          }),
+        );
+        // D35: a download button lets the human export the generated image
+        // without leaving the app. The facade streams the bytes from the
+        // content-addressed store; the renderer never sees the base path.
+        gCard.appendChild(
+          h("div", { class: "row", style: "margin-top:var(--s2)" }, [
+            Button("Download", {
+              small: true,
+              onClick: function () {
+                downloadArtifact(result.artifactId);
+              },
+            }),
+          ]),
+        );
+      }
+      host.appendChild(gCard);
+      host.scrollTop = host.scrollHeight;
+      return;
+    }
     var history = (result && result.history) || [];
     if (history.length === 0) {
       host.appendChild(
@@ -479,19 +219,51 @@
   function renderWelcome() {
     var host = el("chat-welcome");
     clear(host);
+    var wrap = h("div", { class: "welcome-hero" }, [
+      h("div", { class: "welcome-sphere", attrs: { "aria-hidden": "true" } }),
+      h("h1", { text: "Welcome to AI1" }),
+      h("p", { class: "muted", text: "Choose a model and how you want to work. Built-in local models work offline; add a provider for more." }),
+    ]);
+    host.appendChild(wrap);
+    var cards = h("div", { class: "welcome-cards", id: "welcome-cards" });
+    var cardDefs = [
+      { action: "generate", label: "Generate Image", icon: "🎨" },
+      { action: "video", label: "Video Generate", icon: "🎬" },
+      { action: "prompt", label: "Improve Prompt", icon: "✨" },
+      { action: "dashboard", label: "Dashboard Design", icon: "📊" },
+    ];
+    cardDefs.forEach(function (def) {
+      var btn = h("button", {
+        type: "button",
+        class: "welcome-card",
+        attrs: { "data-action": def.action },
+        title: def.label,
+      });
+      btn.appendChild(h("div", { class: "welcome-card-icon", attrs: { "aria-hidden": "true" }, text: def.icon }));
+      btn.appendChild(h("div", { class: "welcome-card-label", text: def.label }));
+      btn.addEventListener("click", function () {
+        var prompt = el("agent-prompt");
+        if (def.action === "generate") {
+          var genBtn = el("composer-generate");
+          if (genBtn) genBtn.click();
+        } else if (def.action === "prompt") {
+          if (prompt) { prompt.value = "Improve this prompt: "; prompt.focus(); }
+        } else if (def.action === "video") {
+          if (prompt) { prompt.value = "Generate a video about "; prompt.focus(); }
+        } else if (def.action === "dashboard") {
+          if (prompt) { prompt.value = "Design a dashboard for "; prompt.focus(); }
+        }
+      });
+      cards.appendChild(btn);
+    });
+    host.appendChild(cards);
+    var suggBox = h("div", { class: "welcome-suggestions" });
     var suggestions = [
       "Explain how a binary search tree works",
       "Draft a README for a CLI tool",
       "Review this function for bugs",
       "Suggest 3 ways to improve this code",
     ];
-    var wrap = h("div", { class: "welcome-hero" }, [
-      h("div", { class: "welcome-mark", text: "AI1" }),
-      h("h1", { text: "Ask anything" }),
-      h("p", { class: "muted", text: "Choose a model and how you want to work. Built-in local models work offline; add a provider for more." }),
-    ]);
-    host.appendChild(wrap);
-    var suggBox = h("div", { class: "welcome-suggestions" });
     suggestions.forEach(function (s) {
       suggBox.appendChild(
         h("button", {
@@ -508,15 +280,104 @@
     host.appendChild(suggBox);
   }
 
+  function renderChatHistory() {
+    var list = el("chat-history-list");
+    if (!list) return;
+    clear(list);
+    var search = (state.chatHistorySearch || "").toLowerCase();
+    var items = (state.chatHistory || []).filter(function (item) {
+      if (!search) return true;
+      return (item.title || "").toLowerCase().indexOf(search) !== -1 ||
+             (item.preview || "").toLowerCase().indexOf(search) !== -1;
+    });
+    if (items.length === 0) {
+      var empty = h("div", { class: "empty", text: "No conversations yet" });
+      list.appendChild(empty);
+      return;
+    }
+    items.forEach(function (item) {
+      var isActive = state.chatHistoryActive === item.id;
+      var row = h("div", {
+        class: "chat-history-item" + (isActive ? " active" : ""),
+        attrs: { "data-id": item.id },
+      });
+      row.appendChild(h("div", { class: "chat-history-item-title", text: item.title || "Untitled" }));
+      if (item.preview) {
+        row.appendChild(h("div", { class: "chat-history-item-preview", text: item.preview }));
+      }
+      if (item.time) {
+        row.appendChild(h("div", { class: "chat-history-item-time", text: item.time }));
+      }
+      row.addEventListener("click", function () {
+        state.chatHistoryActive = item.id;
+        renderChatHistory();
+        if (item.prompt) {
+          var ta = el("agent-prompt");
+          if (ta) { ta.value = item.prompt; ta.focus(); }
+        }
+      });
+      list.appendChild(row);
+    });
+  }
+
   /**
-   * Model picker (the product's most important control). It keeps the native
-   * `#model-select` as the single source of truth — its `.value` is the exact
-   * `provider/modelId` the run path forwards to the engine — and layers a live
-   * search, an OPTIONAL cost filter, and a refresh affordance on top. The
-   * cost filter never removes the user's active pick silently: a pick that a
-   * filter would hide is pinned as a "(current)" option so the selection the
-   * user made can only change if the user changes it.
+   * Model combobox (B2).
+   *
+   * Replaces the native `<select>` with a professional keyboard-navigable
+   * combobox. The hidden `#model-select` stays synced so existing code that
+   * reads `el("model-select").value` keeps working.
    */
+  var modelSelector = null;
+
+  /** Initialize the combobox once on first boot. */
+  function initModelSelector() {
+    if (modelSelector) return;
+    modelSelector = ModelSelector();
+    var cb = el("model-combobox");
+    if (cb) {
+      cb.addEventListener("click", function () { modelSelector.toggle(); });
+      cb.addEventListener("focus", function () { modelSelector.onInputFocus(); });
+    }
+    var inp = el("model-input");
+    if (inp) {
+      inp.addEventListener("click", function () { modelSelector.toggle(); });
+      inp.addEventListener("keydown", function (e) { modelSelector.handleKeydown(e); });
+    }
+    var searchInput = el("model-search");
+    if (searchInput) {
+      searchInput.addEventListener("input", function () {
+        state.modelSearch = searchInput.value;
+        if (modelSelector) modelSelector.setSearch(state.modelSearch);
+      });
+    }
+    var costFilter = el("model-cost-filter");
+    if (costFilter) {
+      costFilter.addEventListener("click", function (ev) {
+        var btn = ev.target;
+        if (!btn || !btn.hasAttribute("data-cost")) return;
+        state.modelCostFilter = btn.getAttribute("data-cost");
+        var btns = costFilter.querySelectorAll("button");
+        for (var i = 0; i < btns.length; i++) {
+          btns[i].setAttribute("aria-pressed", btns[i].getAttribute("data-cost") === state.modelCostFilter ? "true" : "false");
+        }
+        if (modelSelector) modelSelector.setCostFilter(state.modelCostFilter);
+      });
+    }
+    var refreshBtn = el("model-refresh");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", function () {
+        refreshBtn.disabled = true;
+        refreshModelCatalog().then(function () {
+          toast("Models & provider status refreshed.", "ok");
+        }).catch(function () {
+          toast("Could not refresh the model list.", "warn");
+        }).then(function () {
+          refreshBtn.disabled = false;
+        });
+      });
+    }
+  }
+
   async function populateModelSelect() {
     state.modelSearch = "";
     var search = el("model-search");
@@ -529,13 +390,12 @@
         btns[i].setAttribute("aria-pressed", btns[i].getAttribute("data-cost") === "all" ? "true" : "false");
       }
     }
+    initModelSelector();
     await refreshModelCatalog();
   }
 
   /** Re-pull the live catalogue and provider-connection state, then re-render. */
   async function refreshModelCatalog() {
-    var sel = el("model-select");
-    if (sel) sel.disabled = true;
     try {
       var models = await api.listModels();
       state.modelCatalog = (models || []).filter(function (m) {
@@ -544,52 +404,8 @@
     } catch (_e) {
       state.modelCatalog = [];
     }
-    if (sel) sel.disabled = false;
-    renderModelOptions();
+    if (modelSelector) modelSelector.setCatalog(state.modelCatalog);
     loadModelStatus();
-  }
-
-  function renderModelOptions() {
-    var sel = el("model-select");
-    if (!sel) return;
-    var current = sel.value;
-    clear(sel);
-    sel.appendChild(h("option", { value: "", text: "Select a model…" }));
-    var q = state.modelSearch.trim().toLowerCase();
-    var costFilter = state.modelCostFilter;
-    var currentKept = false;
-    for (var i = 0; i < state.modelCatalog.length; i++) {
-      var m = state.modelCatalog[i];
-      var isCurrent = m.id === current;
-      if (isCurrent) {
-        // The active pick is always shown, even when a filter would hide it.
-        addModelOption(sel, m);
-        currentKept = true;
-        continue;
-      }
-      var haystack = (m.displayName || m.id) + "  " + m.id + "  " + m.provider;
-      var matchesSearch = q === "" || haystack.toLowerCase().indexOf(q) !== -1;
-      var matchesCost = costFilter === "all" || m.costClass === costFilter;
-      if (matchesSearch && matchesCost) addModelOption(sel, m);
-    }
-    if (current && !currentKept) {
-      sel.appendChild(h("option", { value: current, text: "(current) " + current }));
-      sel.value = current;
-    }
-  }
-
-  function addModelOption(sel, m) {
-    // D32: the cost label is part of the option text so the human can tell a
-    // free model from a paid one before selecting it. UNKNOWN cost is never
-    // shown as free — it is labelled as unknown and the engine will ask for
-    // approval before any paid call.
-    var costLabel = m.costClass === "FREE" ? "free"
-      : m.costClass === "PAID" ? "paid"
-      : "unknown-cost";
-    sel.appendChild(h("option", {
-      value: m.id,
-      text: m.displayName + "  [" + costLabel + "]  " + m.id,
-    }));
   }
 
   /**
@@ -646,6 +462,9 @@
     clear(host);
     (models || []).forEach(function (m) {
       if (m.enabled !== true || m.available !== true) return;
+      var caps = (m.capabilities || []);
+      var capBadges = caps.length === 0 ? ""
+        : " <span class='mono faint' style='font-size:10px'>" + caps.join(", ") + "</span>";
       var cb = h("input", {
         id: "cmp-model-" + m.id.replace("/", "-"),
         type: "checkbox",
@@ -654,7 +473,7 @@
       if (keep[m.id]) cb.checked = true;
       var label = h("label", { class: "check" }, [
         cb,
-        document.createTextNode(" " + m.displayName + "  " + m.id),
+        document.createTextNode(" " + m.displayName + "  " + m.id + capBadges),
       ]);
       host.appendChild(h("div", null, [label]));
     });
@@ -734,21 +553,36 @@
   async function pollCompareStreams() {
     if (!cmpBatch) return;
     var batch = cmpBatch;
-    for (var i = 0; i < batch.runIds.length; i++) {
-      var runId = batch.runIds[i];
+    // Live progress comes from getCompareProgress — it gives per-slot status
+    // (ok/text/error) from the run record plus the accumulated stream frames.
+    var env = null;
+    try { env = await api.getCompareProgress(batch.batchId); } catch (_e) { env = null; }
+    if (env && env.slots) {
+      for (var i = 0; i < env.slots.length; i++) {
+        renderCompareSlot(i, env.slots[i]);
+      }
+    }
+    // Per-slot text stream is still pulled from the agent stream bridge so
+    // progressive text arrives while a slot is still running. A settled slot
+    // (ok is no longer null) has nothing left to stream, so skip it: the poll
+    // stays cheap and the cursor is never advanced past the end of the stream.
+    for (var j = 0; j < batch.runIds.length; j++) {
+      var runId = batch.runIds[j];
+      var settledSlot = env && env.slots[j] ? env.slots[j] : null;
+      if (settledSlot && settledSlot.ok !== null) continue;
       try {
-        var env = await api.getAgentStream(runId, batch.cursors[runId] || 0);
-        if (!env) continue;
-        for (var j = 0; j < env.events.length; j++) {
-          var ev = env.events[j];
-          var live = el("cmp-live-" + i);
+        var env2 = await api.getAgentStream(runId, batch.cursors[runId] || 0);
+        if (!env2) continue;
+        for (var k = 0; k < env2.events.length; k++) {
+          var ev = env2.events[k];
+          var live = el("cmp-live-" + j);
           if (!live) continue;
           if (ev.kind === "text") {
-            batch.streamText[i] = (batch.streamText[i] || "") + ev.text;
-            live.textContent = batch.streamText[i];
+            batch.streamText[j] = (batch.streamText[j] || "") + ev.text;
+            live.textContent = batch.streamText[j];
           }
         }
-        batch.cursors[runId] = env.nextIndex;
+        batch.cursors[runId] = env2.nextIndex;
       } catch (_e) {
         // The runMany promise is the final word; polling must never mask it.
       }
@@ -874,7 +708,7 @@
       cmpBatch = null;
       startBtn.disabled = false;
       if (head.parentNode) head.remove();
-      await loadRuns();
+      await loadRuns(); await loadNavConversations();
       await refreshStatus();
     }
   }
@@ -891,6 +725,7 @@
   var collabRunId = null;
   var collabBusy = false;
   var collabStreamTimer = null;
+  var collabProgressTimer = null;
   var collabStreamCursor = 0;
 
   function addCollabParticipant() {
@@ -1015,6 +850,13 @@
     }
   }
 
+  function stopCollabProgressPoll() {
+    if (collabProgressTimer !== null) {
+      clearInterval(collabProgressTimer);
+      collabProgressTimer = null;
+    }
+  }
+
   function pushCollabStreamEvent(ev) {
     if (!ev || !ev.participantId) return;
     var cards = el("collab-participant-cards");
@@ -1042,12 +884,42 @@
     }
   }
 
+  // D35: pull-only collab progress. While a collab runs, each participant card
+  // shows live status from the progress endpoint instead of a frozen "running"
+  // badge. The runCollab promise is the final word; this is a read-only mirror.
+  async function pollCollabProgress() {
+    if (!collabRunId) return;
+    try {
+      var env = await api.getCollabProgress(collabRunId);
+      if (!env || !env.participants) return;
+      var cards = el("collab-participant-cards");
+      if (!cards) return;
+      for (var i = 0; i < env.participants.length; i++) {
+        var p = env.participants[i];
+        var card = cards.querySelector('[data-participant="' + p.participantId + '"]');
+        if (!card) continue;
+        var badge = card.querySelector(".badge");
+        if (badge) {
+          badge.textContent = p.status || "running";
+          badge.className = "badge " + (p.status === "completed" ? "ok"
+            : p.status === "failed" ? "danger" : "warn");
+        }
+        var live = card.querySelector(".collab-live");
+        if (live && p.text) {
+          if (live.textContent !== p.text) live.textContent = p.text;
+        }
+      }
+    } catch (_e) {
+      // Pull-only; never mask the runCollab promise.
+    }
+  }
+
   async function cancelCollab() {
     if (!collabRunId) return;
     await api.cancelRun(collabRunId);
     toast("Collaboration cancelled; any budget reservation was released.", "warn");
     collabRunId = null;
-    await loadRuns();
+    await loadRuns(); await loadNavConversations();
   }
 
   /**
@@ -1082,11 +954,16 @@
             var ev = env.events[i];
             if (ev && ev.participantId) {
               if (!participantStates[ev.participantId]) {
-                participantStates[ev.participantId] = { text: "", ok: true, error: null };
+                participantStates[ev.participantId] = { text: "", settled: false, error: null };
               }
-              if (ev.kind === "text") participantStates[ev.participantId].text += ev.text;
-              else if (ev.kind === "finish" && ev.finishReason === "stop") {
-                // final frame
+              var st = participantStates[ev.participantId];
+              if (ev.kind === "text") st.text += ev.text;
+              else if (ev.kind === "finish") {
+                // A finish frame is authoritative: the participant is settled,
+                // whatever the reason. Absent a finish frame the card must not
+                // claim a state the replay never established.
+                st.settled = true;
+                st.error = ev.finishReason === "stop" ? null : (ev.error || "finished: " + ev.finishReason);
               }
             }
           }
@@ -1096,14 +973,14 @@
             var pid = ids[j];
             var st = participantStates[pid];
             cards.appendChild(
-              h("div", { class: "collab-step done", "data-participant": pid, role: "listitem", "aria-label": "Participant " + pid }, [
+              h("div", { class: "collab-step" + (st.settled ? " done" : ""), "data-participant": pid, role: "listitem", "aria-label": "Participant " + pid }, [
                 h("div", { class: "collab-step-head" }, [
                   h("span", { class: "collab-step-num", text: String(j + 1) }),
                   h("div", { class: "collab-step-roles" }, [
                     h("span", { class: "collab-step-role", text: pid }),
                   ]),
                   h("div", { class: "grow" }),
-                  Badge("settled", "ok"),
+                  Badge(st.settled ? "settled" : (st.error ? "error" : "in flight"), st.settled ? "ok" : (st.error ? "danger" : "warn")),
                 ]),
                 h("pre", { class: "code collab-live", "aria-live": "polite" }, [h("span", { text: st.text })]),
               ]),
@@ -1284,6 +1161,8 @@
       stopCollabStreamPoll();
       collabStreamTimer = setInterval(pollCollabStream, 400);
     }
+    // D35: live per-participant progress, independent of streaming.
+    collabProgressTimer = setInterval(pollCollabProgress, 600);
 
     try {
       var result = await api.runCollab(request);
@@ -1303,9 +1182,10 @@
       cards.appendChild(ErrorPanel("COLLABORATION", esc(e), null));
     } finally {
       stopCollabStreamPoll();
+      stopCollabProgressPoll();
       collabBusy = false;
       startBtn.disabled = false;
-      await loadRuns();
+      await loadRuns(); await loadNavConversations();
       await refreshStatus();
     }
   }
@@ -1419,10 +1299,8 @@
       pollRunId = runId;
       streamTimer = setInterval(pollStream, 300);
     }
-    // D7: the human's model choice in the New Chat selector. The catalogue
-    // keys models as "provider/model"; the preference carries the two parts
-    // separately so the engine selector can validate it against the catalogue
-    // and fall back honestly when it is unknown.
+    // D7/B2: the human's model choice. The combobox keeps the hidden
+    // #model-select synced, so this reads the same value as before.
     var modelSel = el("model-select");
     var pref = null;
     if (modelSel && modelSel.value) {
@@ -1436,7 +1314,6 @@
         runId: runId,
         prompt: prompt,
         mode: state.mode,
-        auto: el("agent-auto") && el("agent-auto").checked ? { auto: true } : undefined,
         streaming: streaming,
         preference: pref ? pref : undefined,
       });
@@ -1846,7 +1723,7 @@
     } finally {
       stopDiagStreamPoll();
       el("diag-cancel").disabled = true;
-      await loadRuns();
+      await loadRuns(); await loadNavConversations();
       await refreshStatus();
     }
   }
@@ -1855,7 +1732,7 @@
     if (!diagRunId) return;
     await api.cancelRun(diagRunId);
     toast("Diagnostic cancelled; any budget reservation was released.", "warn");
-    await loadRuns();
+    await loadRuns(); await loadNavConversations();
   }
 
   /* ==================================================================
@@ -2065,6 +1942,105 @@
     });
   }
 
+  /** D35: the sidebar's conversations sub-list. Each row is a recorded run;
+   *  clicking opens its detail, and the row carries rename / delete
+   *  affordances so the human can curate the history without leaving chat. */
+  async function loadNavConversations() {
+    var host = el("nav-conversations-list");
+    var countEl = el("nav-conversations");
+    if (!host) return;
+    clear(host);
+    var runs = [];
+    try { runs = await api.listRuns(); } catch (_e) { runs = []; }
+    state.runs = runs || [];
+    if (countEl) {
+      countEl.textContent = String(state.runs.length);
+      countEl.hidden = state.runs.length === 0;
+    }
+    if (state.runs.length === 0) {
+      host.appendChild(
+        h("button", { type: "button", class: "nav-item", disabled: true }, [
+          h("span", { class: "nav-label faint", text: "No conversations yet" }),
+        ]),
+      );
+      return;
+    }
+    // Newest first — the most recent conversation is the one the human is
+    // most likely to resume.
+    var sorted = state.runs.slice().sort(function (a, b) {
+      return (b.finishedAt || b.startedAt || 0) - (a.finishedAt || a.startedAt || 0);
+    });
+    sorted.forEach(function (run) {
+      var label = run.subject && run.subject.trim()
+        ? run.subject
+        : run.id;
+      var row = h("div", { class: "nav-row" }, [
+        h("button", {
+          type: "button",
+          class: "nav-item",
+          title: "Open " + run.id,
+          onClick: function () { openRun(run.id); },
+        }, [
+          h("span", { class: "nav-label", text: label }),
+          h("span", { class: "nav-meta faint", text: run.status + " · " + runKindLabel(run) }),
+        ]),
+        h("button", {
+          type: "button",
+          class: "nav-icon",
+          title: "Rename this conversation",
+          "aria-label": "Rename " + run.id,
+          onClick: function () { promptRenameRun(run); },
+        }, [h("span", { text: "✎" })]),
+        h("button", {
+          type: "button",
+          class: "nav-icon danger",
+          title: "Delete this conversation",
+          "aria-label": "Delete " + run.id,
+          onClick: function () { promptDeleteRun(run); },
+        }, [h("span", { text: "🗑" })]),
+      ]);
+      host.appendChild(row);
+    });
+  }
+
+  /** D35: rename is cosmetic — the id is untouched, so the artifact store and
+   *  usage ledger keep working. We ask for a name instead of editing inline so
+   *  the value is validated on the facade side. */
+  function promptRenameRun(run) {
+    var name = window.prompt("Rename conversation", run.subject || "");
+    if (name === null) return;
+    api.renameRun(run.id, name.trim() || "").then(function (ok) {
+      if (ok) {
+        toast("Conversation renamed.", "ok");
+        loadNavConversations();
+        if (state.selectedRunId === run.id) loadRuns();
+      } else {
+        toast("Rename failed.", "danger");
+      }
+    }).catch(function () { toast("Rename failed.", "danger"); });
+  }
+
+  /** D35: delete removes the run record. Artifacts and the usage ledger are
+   *  untouched — a deleted conversation is gone from the list but its
+   *  deliverables remain downloadable by id. */
+  function promptDeleteRun(run) {
+    if (!window.confirm("Delete this conversation? Its artifacts stay.")) return;
+    api.deleteRun(run.id).then(function (ok) {
+      if (ok) {
+        toast("Conversation deleted.", "ok");
+        loadNavConversations();
+        loadRuns();
+        if (state.selectedRunId === run.id) {
+          state.selectedRunId = null;
+          var detail = el("runs-detail");
+          if (detail) clear(detail);
+        }
+      } else {
+        toast("Delete failed.", "danger");
+      }
+    }).catch(function () { toast("Delete failed.", "danger"); });
+  }
+
   async function loadWorkspace() {
     var host = el("workspace-roots");
     clear(host);
@@ -2125,61 +2101,336 @@
   }
 
   /* ==================================================================
-     Settings view (M5)
+     Artifacts view (D35)
      ================================================================== */
+
+  async function loadArtifacts() {
+    var host = el("artifacts-list");
+    if (!host) return;
+    clear(host);
+    host.appendChild(SkeletonRow(3));
+    var artifacts = [];
+    try { artifacts = await api.listArtifacts(); } catch (_e) { artifacts = []; }
+    clear(host);
+    if (!artifacts || artifacts.length === 0) {
+      host.appendChild(EmptyState("No artifacts yet. Upload an image or generate something."));
+      return;
+    }
+    // Newest first.
+    var sorted = artifacts.slice().sort(function (a, b) {
+      return (b.addedAt || 0) - (a.addedAt || 0);
+    });
+    sorted.forEach(function (art) {
+      var card = h("div", { class: "card card-pad row" }, [
+        h("div", { class: "grow stack" }, [
+          h("span", { class: "mono grow", text: art.name || art.artifactId }),
+          h("span", { class: "faint", text: (art.contentType || "").split("/")[1] + "  ·  " +
+            formatBytes(art.size) + "  ·  " + new Date(art.addedAt).toLocaleString() }),
+          art.sourceRunId
+            ? h("span", { class: "faint", text: "from run: " + art.sourceRunId })
+            : null,
+        ]),
+        Button("Open", {
+          small: true,
+          onClick: async function () {
+            try {
+              var payload = await api.getArtifact(art.artifactId);
+              if (payload) showArtifactDetail(art, payload);
+            } catch (_e) { toast("Could not read artifact.", "danger"); }
+          },
+        }),
+        Button("Download", {
+          small: true,
+          variant: "info",
+          onClick: async function () {
+            try {
+              var dl = await api.downloadArtifact(art.artifactId);
+              if (dl && dl.url) {
+                var a = document.createElement("a");
+                a.href = dl.url; a.download = art.name || art.artifactId;
+                document.body.appendChild(a); a.click(); a.remove();
+              }
+            } catch (_e) { toast("Download failed.", "danger"); }
+          },
+        }),
+      ]);
+      host.appendChild(card);
+    });
+  }
+
+  function formatBytes(b) {
+    if (b == null) return "—";
+    if (b < 1024) return b + " B";
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + " KB";
+    return (b / 1024 / 1024).toFixed(1) + " MB";
+  }
+
+  function showArtifactDetail(art, payload) {
+    // Images render inline; everything else is text or raw bytes summary.
+    var container = h("div", { class: "stack", style: "margin:var(--s3) 0" });
+    if (art.contentType && art.contentType.startsWith("image/")) {
+      if (payload && payload.src) {
+        container.appendChild(h("img", { src: payload.src, style: "max-width:100%;border-radius:var(--radius)" }));
+      } else {
+        container.appendChild(EmptyState("Image data unavailable."));
+      }
+    } else {
+      container.appendChild(mono(payload ? payload.text || JSON.stringify(payload, null, 2) : "(empty)"));
+    }
+    openModal(
+      art.name || art.artifactId,
+      container,
+      { confirmLabel: "Close", cancelLabel: null },
+    );
+  }
+
+  /**
+   * D35: download a generated image to the host filesystem. The bytes come
+   * from the content-addressed store through the facade — the renderer never
+   * sees the base path, only the artifact id it received from a generation
+   * result or an upload.
+   */
+  function downloadArtifact(artifactId) {
+    api
+      .downloadArtifact(artifactId)
+      .then(function (payload) {
+        var bytes = payload.bytes;
+        if (!(bytes instanceof Uint8Array)) {
+          // The IPC layer may hand back a plain array; coerce for the blob.
+          bytes = new Uint8Array(Array.from(bytes));
+        }
+        var blob = new Blob([bytes], { type: "image/png" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = (payload.artifactId || "generated") + ".png";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast("Downloaded " + (payload.artifactId || "image"), "ok");
+      })
+      .catch(function (e) {
+        toast("Download failed: " + (e instanceof Error ? e.message : String(e)), "danger");
+      });
+  }
+
+  /**
+   * P1-6: image generation modal. The human types a prompt; the request
+   * crosses the bridge as a plain object. The gate (media.enabled = false in
+   * the MVP) blocks it before any credential or transport is touched, so the
+   * modal is safe to show even with no provider registered.
+   */
+  function openGenerateModal() {
+    var body = h("div", { class: "stack" }, [
+      h("label", { class: "muted", text: "Prompt" }),
+      h("textarea", {
+        id: "generate-prompt",
+        rows: 3,
+        placeholder: "Describe the image you want to generate…",
+      }),
+      h("div", { class: "row" }, [
+        h("label", { class: "muted", text: "Capability" }),
+        h("select", { id: "generate-capability" }, [
+          h("option", { value: "TEXT_TO_IMAGE", text: "Text → Image" }),
+          h("option", { value: "IMAGE_TO_IMAGE", text: "Image → Image" }),
+          h("option", { value: "IMAGE_EDIT", text: "Image Edit" }),
+          h("option", { value: "IMAGE_UPSCALE", text: "Image Upscale" }),
+        ]),
+      ]),
+      h("div", { class: "row" }, [
+        h("label", { class: "muted", text: "Resolution" }),
+        h("select", { id: "generate-resolution" }, [
+          h("option", { value: "", text: "Default" }),
+          h("option", { value: "512x512", text: "512×512" }),
+          h("option", { value: "1024x1024", text: "1024×1024" }),
+          h("option", { value: "1536x1024", text: "1536×1024 (3:2)" }),
+          h("option", { value: "1024x1536", text: "1024×1536 (2:3)" }),
+          h("option", { value: "1792x1024", text: "1792×1024 (16:9)" }),
+          h("option", { value: "1024x1792", text: "1024×1792 (9:16)" }),
+        ]),
+      ]),
+      h("div", { class: "row" }, [
+        h("label", { class: "muted", text: "Aspect ratio" }),
+        h("select", { id: "generate-aspect" }, [
+          h("option", { value: "", text: "Default" }),
+          h("option", { value: "1:1", text: "1:1 (square)" }),
+          h("option", { value: "16:9", text: "16:9 (widescreen)" }),
+          h("option", { value: "9:16", text: "9:16 (portrait)" }),
+          h("option", { value: "4:3", text: "4:3 (landscape)" }),
+          h("option", { value: "3:4", text: "3:4 (portrait)" }),
+          h("option", { value: "3:2", text: "3:2 (landscape)" }),
+          h("option", { value: "2:3", text: "2:3 (portrait)" }),
+        ]),
+      ]),
+      h("div", { class: "row" }, [
+        h("label", { class: "muted", text: "Seed" }),
+        h("input", { id: "generate-seed", type: "number", placeholder: "optional" }),
+      ]),
+      h("div", { id: "generate-status", class: "muted", text: "" }),
+    ]);
+    openModal("Generate image", body, {
+      confirmLabel: "Generate",
+      cancelLabel: "Cancel",
+      confirm: function () {
+        var prompt = (el("generate-prompt") || {}).value || "";
+        var capability = (el("generate-capability") || {}).value || "TEXT_TO_IMAGE";
+        var resolution = (el("generate-resolution") || {}).value || "";
+        var aspect = (el("generate-aspect") || {}).value || "";
+        var seed = (el("generate-seed") || {}).value || "";
+        var params = {};
+        if (resolution) {
+          var parts = resolution.split("x");
+          if (parts.length === 2) params.resolution = [Number(parts[0]), Number(parts[1])];
+        }
+        if (aspect) params.aspectRatio = aspect;
+        if (seed) params.seed = Number(seed);
+        var statusEl = el("generate-status");
+        if (statusEl) text(statusEl, "Generating…");
+        var runId = "media-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+        // D35: the cancel button aborts the in-flight call. The desktop stack
+        // owns the abort controller; a cancelled attempt is never retried.
+        var cancelBtn = h("button", {
+          id: "generate-cancel",
+          class: "btn",
+          text: "Cancel generation",
+          disabled: true,
+        });
+        if (statusEl && statusEl.parentNode) statusEl.parentNode.insertBefore(cancelBtn, statusEl.nextSibling);
+        var settled = false;
+        var setCancelEnabled = function (enabled) {
+          if (cancelBtn) {
+            cancelBtn.disabled = !enabled;
+            cancelBtn.textContent = enabled ? "Cancel generation" : "Cancelling…";
+          }
+        };
+        // The button is only live while the request is in flight. It starts
+        // disabled and is armed once the call is away; every settle path
+        // (result, throw, or cancel) removes it so it can never linger.
+        setCancelEnabled(true);
+        cancelBtn.addEventListener("click", function () {
+          if (cancelBtn.disabled) return;
+          setCancelEnabled(false);
+          api.cancelMedia(runId).then(function () {
+            toast("Generation cancelled", "ok");
+          });
+        });
+        api.generateMedia({ capability, prompt, params, runId: runId })
+          .then(function (result) {
+            settled = true;
+            if (cancelBtn) cancelBtn.remove();
+            if (statusEl) text(statusEl, "");
+            if (!result || !result.ok) {
+              // The router returns ok:false with a typed warning for every
+              // non-gate failure: no provider, no enabled model, missing key,
+              // budget exceeded, generation cap, cost unknown. Surface the
+              // warning verbatim — it already says WHAT to fix.
+              var warn = result && result.warnings && result.warnings.length > 0
+                ? result.warnings.join("; ")
+                : "Media generation failed";
+              toast(warn, "danger");
+              return;
+            }
+            // Each generated artifact lands in the store; render it inline.
+            for (var i = 0; i < result.artifacts.length; i++) {
+              var art = result.artifacts[i];
+              renderTranscript({
+                kind: "generated",
+                label: "Generated " + (result.model || "image"),
+                body: "",
+                contentType: art.mimeType,
+                artifactId: art.artifactId,
+              });
+            }
+            var genNote = result.costUnknown
+              ? "Image generated (cost not reported by the provider — treated as unknown)."
+              : "Image generated.";
+            toast(genNote, "ok");
+          })
+          .catch(function (e) {
+            settled = true;
+            if (cancelBtn) cancelBtn.remove();
+            if (statusEl) text(statusEl, "");
+            // The only thing that throws out of the router is the frozen gate.
+            // Everything else is returned as a typed warning above, so a throw
+            // here is MEDIA_DISABLED — tell the human the switch to flip.
+            var msg = e instanceof Error ? e.message : String(e);
+            if (/media.enabled = false/i.test(msg)) {
+              toast("Media generation is disabled — enable it in Settings (Media generation) before generating.", "danger");
+            } else if (/cancelled/i.test(msg)) {
+              toast("Generation cancelled", "ok");
+            } else {
+              toast("Generate failed: " + esc(msg), "danger");
+            }
+          });
+      },
+    });
+  }
 
   async function loadSettings() {
     var credHost = el("settings-credentials");
     clear(credHost);
     credHost.appendChild(SkeletonRow(2));
 
-    var names = await api.listCredentialNames();
-    clear(credHost);
-    if (!names || names.length === 0) {
-      credHost.appendChild(EmptyState("No credentials stored."));
-    } else {
-      names.forEach(function (name) {
-        credHost.appendChild(
-          h("div", { class: "card card-pad row" }, [
-            h("span", { class: "mono grow", text: name }),
-            Button("Replace", {
-              small: true,
-              onClick: function () {
-                setCredential(name);
-              },
-            }),
-            Button("Delete", {
-              small: true,
-              variant: "danger",
-              onClick: function () {
-                deleteCredential(name);
-              },
-            }),
-          ]),
-        );
-      });
+    // Each section is isolated: a failure in one (e.g. the usage totals
+    // endpoint) must not leave the rest of the view on a skeleton, and the
+    // human must see WHAT failed rather than a blank page.
+    try {
+      var names = await api.listCredentialNames();
+      clear(credHost);
+      if (!names || names.length === 0) {
+        credHost.appendChild(EmptyState("No credentials stored."));
+      } else {
+        names.forEach(function (name) {
+          credHost.appendChild(
+            h("div", { class: "card card-pad row" }, [
+              h("span", { class: "mono grow", text: name }),
+              Button("Replace", {
+                small: true,
+                onClick: function () {
+                  setCredential(name);
+                },
+              }),
+              Button("Delete", {
+                small: true,
+                variant: "danger",
+                onClick: function () {
+                  deleteCredential(name);
+                },
+              }),
+            ]),
+          );
+        });
+      }
+      credHost.appendChild(
+        Button("Add credential", {
+          onClick: function () {
+            setCredential(null);
+          },
+        }),
+      );
+    } catch (e) {
+      clear(credHost);
+      credHost.appendChild(ErrorState("Could not load credentials: " + esc(e)));
     }
-    credHost.appendChild(
-      Button("Add credential", {
-        onClick: function () {
-          setCredential(null);
-        },
-      }),
-    );
 
     var usageHost = el("settings-usage");
     clear(usageHost);
-    var totals = await api.getUsageTotals();
-    usageHost.appendChild(
-      Table(
-        ["Invocations", "Total cost (USD)", "Total tokens"],
-        [h("tr", null, [
-          h("td", { class: "mono", text: String(totals.invocations) }),
-          h("td", { class: "mono", text: String(totals.totalCostUsd) }),
-          h("td", { class: "mono", text: String(totals.totalTokens) }),
-        ])],
-      ),
-    );
+    try {
+      var totals = await api.getUsageTotals();
+      usageHost.appendChild(
+        Table(
+          ["Invocations", "Total cost (USD)", "Total tokens"],
+          [h("tr", null, [
+            h("td", { class: "mono", text: String(totals.invocations) }),
+            h("td", { class: "mono", text: String(totals.totalCostUsd) }),
+            h("td", { class: "mono", text: String(totals.totalTokens) }),
+          ])],
+        ),
+      );
+    } catch (e) {
+      usageHost.appendChild(ErrorState("Could not load usage totals: " + esc(e)));
+    }
 
     var budgetHost = el("settings-budget");
     clear(budgetHost);
@@ -2187,34 +2438,77 @@
     budgetHost.appendChild(
       h("p", { class: "muted", style: "margin:0 0 var(--s2)", text: "USD the engine may spend on paid models. 0 means no spend — a paid model is selectable but will be refused at the budget gate. Raising this is an explicit act; nothing raises it without you typing a number." }),
     );
-    var budget = await api.getBudget();
-    var budgetInput = h("input", {
-      id: "settings-budget-input",
-      type: "number",
-      class: "input",
-      min: "0",
-      max: "1000000",
-      step: "1",
-      value: String(budget.budgetUsd),
-    });
-    var budgetStatus = h("div", { class: "muted mono", style: "margin:var(--s2) 0 0", text: "current: " + budget.budgetUsd + " USD · reserved " + budget.reservedUsd + " · spent " + budget.spentUsd });
-    budgetInput.addEventListener("change", async function () {
-      var n = Number(budgetInput.value);
-      if (!Number.isFinite(n) || n < 0) {
-        budgetInput.value = String(budget.budgetUsd);
-        budgetStatus.textContent = "invalid value; unchanged";
-        return;
-      }
-      try {
-        var saved = await api.patchSettings({ budgetUsd: Math.min(n, 1000000) });
-        budgetInput.value = String(saved.budgetUsd);
-        budgetStatus.textContent = "budget set to " + saved.budgetUsd + " USD";
-      } catch (e) {
-        budgetStatus.textContent = "failed to save budget";
-      }
-    });
-    budgetHost.appendChild(budgetInput);
-    budgetHost.appendChild(budgetStatus);
+    try {
+      var budget = await api.getBudget();
+      var budgetInput = h("input", {
+        id: "settings-budget-input",
+        type: "number",
+        class: "input",
+        min: "0",
+        max: "1000000",
+        step: "1",
+        value: String(budget.budgetUsd),
+      });
+      var budgetStatus = h("div", { class: "muted mono", style: "margin:var(--s2) 0 0", text: "current: " + budget.budgetUsd + " USD · reserved " + budget.reservedUsd + " · spent " + budget.spentUsd });
+      budgetInput.addEventListener("change", async function () {
+        var n = Number(budgetInput.value);
+        if (!Number.isFinite(n) || n < 0) {
+          budgetInput.value = String(budget.budgetUsd);
+          budgetStatus.textContent = "invalid value; unchanged";
+          return;
+        }
+        try {
+          var saved = await api.patchSettings({ budgetUsd: Math.min(n, 1000000) });
+          budgetInput.value = String(saved.budgetUsd);
+          budgetStatus.textContent = "budget set to " + saved.budgetUsd + " USD";
+        } catch (e) {
+          budgetStatus.textContent = "failed to save budget";
+        }
+      });
+      budgetHost.appendChild(budgetInput);
+      budgetHost.appendChild(budgetStatus);
+    } catch (e) {
+      budgetHost.appendChild(ErrorState("Could not load budget: " + esc(e)));
+    }
+
+    // D35: media generation opt-in. The frozen default is OFF; flipping this is
+    // the explicit human act that permits a media call at all. It does nothing
+    // by itself — a provider with media capabilities AND a non-zero budget for
+    // paid models are also required — but it is the switch the UI shows.
+    var mediaHost = el("settings-media");
+    clear(mediaHost);
+    mediaHost.appendChild(h("h3", { text: "Media generation" }));
+    var mediaEnabled = false;
+    try {
+      var settings = await api.getSettings();
+      mediaEnabled = Boolean(settings && settings.mediaEnabled);
+    } catch (e) {
+      mediaHost.appendChild(ErrorState("Could not load media setting: " + esc(e)));
+    }
+    var mediaToggle = h("label", { class: "field" }, [
+      h("input", { id: "settings-media-toggle", type: "checkbox", checked: mediaEnabled }),
+      h("span", { text: "Enable image generation" }),
+    ]);
+    var mediaNote = h("p", { class: "muted", style: "margin:0 0 var(--s2)", text: "Off by default. When on, the Generate button appears and a registered provider with media capabilities can produce images. A paid model also needs a non-zero spend budget and an explicit approval." });
+    var mediaStatus = h("div", { class: "muted mono", style: "margin:var(--s2) 0 0", text: mediaEnabled ? "media generation is enabled" : "media generation is disabled (frozen default)" });
+    var mediaToggleEl = el("settings-media-toggle");
+    if (mediaToggleEl) {
+      mediaToggleEl.addEventListener("change", async function () {
+        var next = mediaToggleEl.checked;
+        try {
+          var saved = await api.patchSettings({ mediaEnabled: next });
+          mediaStatus.textContent = saved.mediaEnabled
+            ? "media generation is enabled"
+            : "media generation is disabled (frozen default)";
+        } catch (e) {
+          mediaToggleEl.checked = !next;
+          mediaStatus.textContent = "failed to save media setting";
+        }
+      });
+    }
+    mediaHost.appendChild(mediaToggle);
+    mediaHost.appendChild(mediaNote);
+    mediaHost.appendChild(mediaStatus);
 
     var frozenHost = el("settings-frozen");
     clear(frozenHost);
@@ -2271,6 +2565,17 @@
       h("option", { value: "openai-compatible", text: "OpenAI-compatible (POST /chat/completions)" }),
       h("option", { value: "anthropic", text: "Anthropic Messages (POST /messages) — FCC gateway" }),
     ]);
+    // D35: media capabilities + declared per-image cost. These are what make a
+    // model usable by the media router; without them the provider is registered
+    // but can never route a media request.
+    var mediaCapsInput = h("input", { id: "pv-mediacaps", type: "text", class: "input", placeholder: "TEXT_TO_IMAGE, IMAGE_TO_IMAGE (leave blank for text-only)" });
+    var costInput = h("input", { id: "pv-cost", type: "number", class: "input", placeholder: "cost per image USD, e.g. 0.006 (blank = unknown)" });
+    costInput.min = "0";
+    costInput.step = "0.001";
+    // D35: the image-generation path. OpenRouter mounts it at /images; the
+    // OpenAI-compatible default is /images/generations. Leave blank for the
+    // default — a typo can never redirect a generation to an unintended path.
+    var imagePathInput = h("input", { id: "pv-imagepath", type: "text", class: "input", placeholder: "image path, e.g. /images (blank = /images/generations)" });
     const testOut = h("div", { class: "muted mono", text: "" });
     const refreshOut = h("div", { class: "muted mono", text: "" });
     var discovered = null;
@@ -2283,6 +2588,10 @@
         h("label", { class: "field" }, [h("span", { text: "Protocol" }), protocolInput]),
         h("label", { class: "field" }, [h("span", { text: "Key env var" }), keyInput]),
         h("label", { class: "field" }, [h("span", { text: "Models" }), modelsInput]),
+        h("label", { class: "field" }, [h("span", { text: "Media capabilities" }), mediaCapsInput]),
+        h("label", { class: "field" }, [h("span", { text: "Cost per image (USD)" }), costInput]),
+        h("label", { class: "field" }, [h("span", { text: "Image path" }), imagePathInput]),
+        h("p", { class: "muted", style: "margin:0", text: "Media capabilities are the ids the media router matches against (TEXT_TO_IMAGE, IMAGE_TO_IMAGE, IMAGE_EDIT, IMAGE_UPSCALE, INPAINT, OUTPAINT, IMAGE_ANALYSIS, TEXT_TO_VIDEO, …). Without them the model is text-only for media purposes. The cost is what one generation charges; leave it blank when you do not know it — the router will flag the call as cost-unknown rather than treating it as free. The image path is the endpoint-relative path the adapter calls for generation: OpenRouter uses /images, the OpenAI-compatible default is /images/generations. Leave blank for the default." }),
         h("p", { class: "muted", style: "margin:0", text: "Type the model ids you know, or leave them blank and use Refresh models to pull the full catalogue the gateway advertises." }),
         Button("Test config", {
           small: true,
@@ -2341,14 +2650,32 @@
     var endpoint = String(endpointInput.value || "").trim();
     var keyEnv = String(keyInput.value || "").trim();
     var protocol = String(protocolInput.value || "openai-compatible");
+    var imagePath = String(imagePathInput.value || "").trim();
     var manualModels = String(modelsInput.value || "")
       .split(",")
       .map(function (s) { return s.trim(); })
       .filter(function (s) { return s.length > 0; });
+    // D35: media capabilities are comma-separated capability ids. Unknown ids
+    // are dropped at the settings boundary, so a typo can never select an
+    // unintended media model.
+    var mediaCapsRaw = String(mediaCapsInput.value || "")
+      .split(",")
+      .map(function (s) { return s.trim(); })
+      .filter(function (s) { return s.length > 0; });
+    var costRaw = String(costInput.value || "").trim();
+    var costVal = costRaw.length > 0 ? Number(costRaw) : null;
     var modelDefs = manualModels.length > 0
-      ? manualModels.map(function (m) { return { id: m, displayName: m }; })
+      ? manualModels.map(function (m) {
+          var def = { id: m, displayName: m };
+          if (mediaCapsRaw.length > 0) def.mediaCapabilities = mediaCapsRaw;
+          if (costVal !== null && Number.isFinite(costVal) && costVal >= 0) def.costEstimateUsd = costVal;
+          return def;
+        })
       : (discovered || []).map(function (m) {
-          return { id: m.id, displayName: m.displayName || m.id, streaming: m.streaming === true };
+          var def = { id: m.id, displayName: m.displayName || m.id, streaming: m.streaming === true };
+          if (mediaCapsRaw.length > 0) def.mediaCapabilities = mediaCapsRaw;
+          if (costVal !== null && Number.isFinite(costVal) && costVal >= 0) def.costEstimateUsd = costVal;
+          return def;
         });
     if (!id || !endpoint || modelDefs.length === 0) {
       toast("A provider needs an id, an endpoint, and at least one model.", "warn");
@@ -2356,16 +2683,16 @@
     }
     var settings = await api.getSettings();
     var existing = (settings && settings.providers) || [];
-    var next = existing.concat([
-      {
-        id: id,
-        displayName: id,
-        endpoint: endpoint,
-        protocol: protocol,
-        apiKeyEnv: keyEnv || null,
-        models: modelDefs,
-      },
-    ]);
+    var prov = {
+      id: id,
+      displayName: id,
+      endpoint: endpoint,
+      protocol: protocol,
+      apiKeyEnv: keyEnv || null,
+      models: modelDefs,
+    };
+    if (imagePath.length > 0) prov.imagePath = imagePath;
+    var next = existing.concat([prov]);
     var saved = await api.patchSettings({ providers: next });
     if ((saved.providers || []).length === existing.length) {
       toast("That provider was rejected (see above) — nothing was added.", "warn");
@@ -2472,6 +2799,7 @@
     audit: loadAudit,
     models: loadModels,
     workspace: loadWorkspace,
+    artifacts: loadArtifacts,
     settings: loadSettings,
   };
 
@@ -2491,7 +2819,10 @@
     pollTimer = setInterval(function () {
       // Main never pushes. While anything is live the human must still see the
       // approval it raised, so the pending view is read back on a timer.
-      if (state.view === "approvals" || state.view === "agent") {
+      // `agent` is not a real view — the single-model chat view is `chat`. Without
+      // this fix the polling branch never fires and a pending approval raised
+      // during a chat run is not refreshed until the human switches views.
+      if (state.view === "approvals" || state.view === "chat") {
         loadApprovals().catch(function () {});
       }
       refreshStatus().catch(function () {});
@@ -2553,18 +2884,21 @@
 
     el("agent-run").addEventListener("click", runAgent);
     el("agent-cancel").addEventListener("click", cancelAgent);
-    el("first-run-local")?.addEventListener("click", function () {
+    var firstLocal = el("first-run-local");
+    if (firstLocal) firstLocal.addEventListener("click", function () {
       state.firstRunDismissed = true;
       var card = el("agent-first-run");
       if (card && card.style) card.style.display = "none";
       el("agent-prompt").focus();
     });
-    el("first-run-dismiss")?.addEventListener("click", function () {
+    var firstDismiss = el("first-run-dismiss");
+    if (firstDismiss) firstDismiss.addEventListener("click", function () {
       state.firstRunDismissed = true;
       var card = el("agent-first-run");
       if (card && card.style) card.style.display = "none";
     });
-    el("first-run-provider")?.addEventListener("click", function () {
+    var firstProvider = el("first-run-provider");
+    if (firstProvider) firstProvider.addEventListener("click", function () {
       state.firstRunDismissed = true;
       var card = el("agent-first-run");
       if (card && card.style) card.style.display = "none";
@@ -2579,18 +2913,99 @@
         } catch (_e) {}
       });
     });
-    el("agent-prompt").addEventListener("keydown", function (ev) {
+    var promptEl = el("agent-prompt");
+    if (promptEl) promptEl.addEventListener("keydown", function (ev) {
       if (ev.key === "Enter" && !ev.shiftKey) {
         ev.preventDefault();
         runAgent();
       }
     });
 
+    /* Chat history panel (D39): search, new-chat, and conversation switching. */
+    var historyNew = el("history-new");
+    if (historyNew) historyNew.addEventListener("click", function () {
+      state.chatHistoryActive = null;
+      renderChatHistory();
+      el("agent-prompt") && el("agent-prompt").focus();
+    });
+    var historySearch = el("history-search");
+    if (historySearch) historySearch.addEventListener("input", function () {
+      state.chatHistorySearch = historySearch.value;
+      renderChatHistory();
+    });
+    renderChatHistory();
+
+    // D35: attach a file from the OS dialog; the browser reads it, sends bytes
+    // to the facade, then routes through analyzeFile so images go to vision
+    // and text goes to the text analyzer. The result appears as a turn in the
+    // transcript so the human can see what was extracted.
+    var uploadBtn = el("composer-upload");
+    var fileInput = el("composer-file-input");
+    if (uploadBtn && fileInput) {
+      uploadBtn.addEventListener("click", function () { fileInput.click(); });
+      fileInput.addEventListener("change", async function () {
+        var file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        try {
+          toast("Reading file: " + file.name, "info");
+          // The renderer reads the bytes locally and sends them through
+          // uploadBytes. The bytes cross the bridge as a plain array — never
+          // a path — and the store confines the write to paths.artifacts.
+          var buf = await file.arrayBuffer();
+          var bytes = Array.from(new Uint8Array(buf));
+          var result = await api.uploadBytes(bytes, file.name);
+          if (!result || !result.artifactId) {
+            toast("Upload failed.", "danger");
+            fileInput.value = "";
+            return;
+          }
+          toast("File uploaded — analyzing...", "info");
+          var analysis = await api.analyzeFile(result.artifactId);
+          fileInput.value = "";
+          var body = analysis ? JSON.stringify(analysis, null, 2) : "(no result)";
+          renderTranscript({
+            kind: "uploaded",
+            label: "Uploaded: " + file.name,
+            body: body,
+            contentType: file.type,
+            artifactId: result.artifactId,
+          });
+        } catch (e) {
+          toast("Upload/analyze failed: " + esc(e), "danger");
+          fileInput.value = "";
+        }
+      });
+    }
+
+    /* P1-6: image generation. The button opens a modal where the human types a
+     * prompt; the request crosses the bridge as a plain object, and the gate
+     * (media.enabled = false in the MVP) blocks it before any credential or
+     * transport is touched. When the gate is flipped and a provider is
+     * registered, the same channel generates images. */
+    var generateBtn = el("composer-generate");
+    if (generateBtn) {
+      generateBtn.addEventListener("click", function () {
+        openGenerateModal();
+      });
+    }
+
+    /* D39: composer tool affordances — tools toggle and voice input stub. */
+    var toolsToggle = el("composer-tools-toggle");
+    if (toolsToggle) toolsToggle.addEventListener("click", function () {
+      toast("Tools panel coming soon.", "info");
+    });
+    var micBtn = el("composer-mic");
+    if (micBtn) micBtn.addEventListener("click", function () {
+      toast("Voice input is not available in this build.", "warn");
+    });
+
     /* Model picker: live search, optional cost filter, and a refresh affordance. */
     var modelSearch = el("model-search");
     if (modelSearch) modelSearch.addEventListener("input", function () {
       state.modelSearch = modelSearch.value;
-      renderModelOptions();
+      // The combobox owns the render path; wire() must not reach for a
+      // function that does not exist (a ReferenceError on every keystroke).
+      if (modelSelector) modelSelector.setSearch(state.modelSearch);
     });
     var costFilter = el("model-cost-filter");
     if (costFilter) costFilter.addEventListener("click", function (ev) {
@@ -2601,7 +3016,7 @@
       for (var i = 0; i < btns.length; i++) {
         btns[i].setAttribute("aria-pressed", btns[i].getAttribute("data-cost") === state.modelCostFilter ? "true" : "false");
       }
-      renderModelOptions();
+      if (modelSelector) modelSelector.setCostFilter(state.modelCostFilter);
     });
     var modelRefresh = el("model-refresh");
     if (modelRefresh) modelRefresh.addEventListener("click", function () {
@@ -2632,6 +3047,11 @@
       addRoot().catch(function (e) {
         toast("Could not add a folder: " + esc(e), "danger");
       });
+    });
+
+    var artifactsRefresh = el("artifacts-refresh");
+    if (artifactsRefresh) artifactsRefresh.addEventListener("click", function () {
+      loadArtifacts().catch(function () {});
     });
 
     el("diag-run").addEventListener("click", function () {
@@ -2697,28 +3117,6 @@
     }
   }
 
-  function setLanguage(lang) {
-    state.lang = lang;
-    var root = document.documentElement;
-    if (root) {
-      root.lang = lang;
-      root.dataset.dir = lang === "fa" ? "rtl" : "ltr";
-    }
-    var langSelect = el("lang-select");
-    if (langSelect) langSelect.value = lang;
-    // Toggle data-en/data-fa text on every labelled element.
-    var labelled = document.querySelectorAll("[data-en]");
-    for (var i = 0; i < labelled.length; i++) {
-      var node = labelled[i];
-      var fa = node.getAttribute("data-fa");
-      if (lang === "fa" && fa) node.textContent = fa;
-      else {
-        var en = node.getAttribute("data-en");
-        if (en) node.textContent = en;
-      }
-    }
-    toast("Language: " + (lang === "fa" ? "فارسی" : "English"), "ok");
-  }
 
   async function init() {
     try {
@@ -2740,14 +3138,7 @@
     // would otherwise start with an empty model select and empty sidebar.
     populateModelSelect().catch(function () {});
     loadNavWorkspaces().catch(function () {});
-    var convList = el("nav-conversations-list");
-    if (convList) {
-      convList.appendChild(
-        h("button", { type: "button", class: "nav-item", disabled: true }, [
-          h("span", { class: "nav-label faint", text: "No conversations yet" }),
-        ]),
-      );
-    }
+    loadNavConversations().catch(function () {});
     await refreshStatus();
     await loadApprovals();
     await loadTools();
@@ -2755,6 +3146,12 @@
     updateFirstRunCard();
     // Language: default to English; a stored preference would go through
     // patchSettings in a future iteration. For now the selector is the control.
+    // Re-render the active view when the language changes so text that is
+    // built at mount time (rather than carried on a data-en attribute) flips
+    // along with the static labels.
+    window.addEventListener("all-in-1:languagechange", function () {
+      refreshView(state.view).catch(function () {});
+    });
     setLanguage("en");
   }
 

@@ -133,7 +133,8 @@ describe("runMany — one prompt, N models", () => {
     for (const r of results) {
       expect(r.ok).toBe(true);
       expect(typeof r.text).toBe("string");
-      expect(r.text.length).toBeGreaterThan(0);
+      expect(r.text).toBeDefined();
+      expect(r.text!.length).toBeGreaterThan(0);
     }
     // In INSPECT mode the agent loop makes tools visible, so the selector
     // requires model.tools === true. local/deterministic has tools:false, so
@@ -217,7 +218,8 @@ describe("runMany — one prompt, N models", () => {
     // The failure must not have discarded the sibling's answer.
     expect(sibling?.ok).toBe(true);
     expect(typeof sibling?.text).toBe("string");
-    expect(sibling?.text.length).toBeGreaterThan(0);
+    expect(sibling?.text).toBeDefined();
+    expect(sibling!.text!.length).toBeGreaterThan(0);
     expect(sibling?.executedModel).toBe("local/agent");
     // The runs view agrees: one cancelled, one completed.
     const byId = new Map(f.listRuns().map((r) => [r.id, r]));

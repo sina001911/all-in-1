@@ -87,7 +87,14 @@ describe("renderer parses as browser JavaScript (the D1 regression)", () => {
     // top-level code path (handler wiring + the initial refresh chain) runs
     // rather than merely parsing. The DOM is a stub; the bridge is a proxy
     // that records every view the renderer pulls.
-    const src = read(join("renderer", "renderer.js"));
+    //
+    // The renderer is the last of five classic scripts loaded in dependency
+    // order (components → state → theme → i18n → renderer). Each earlier one
+    // contributes the helpers the main body calls, so they must run in the
+    // same context first — a classic script sees the globals of the scripts
+    // that ran before it, exactly as the page does.
+    const modules = ["components.js", "state.js", "theme.js", "i18n.js", "renderer.js"];
+    const src = modules.map((m) => read(join("renderer", m))).join("\n;\n");
     const calls: string[] = [];
 
     function fakeEl() {
@@ -221,7 +228,9 @@ describe("renderer isolation contract (kept from D1)", () => {
   });
 
   it("escapes rendered content to avoid injecting markup", () => {
-    expect(renderer()).toContain("function esc(");
+    // The escaping path lives in the shared components module (B1 split), so
+    // assert it there rather than in the main renderer body.
+    expect(read(join("renderer", "components.js"))).toContain("function esc(");
   });
 
   it("the page loads a packaged script, not a remote one", () => {
@@ -234,11 +243,12 @@ describe("renderer isolation contract (kept from D1)", () => {
 
   it("the model picker never drops the active selection (no silent fallback)", () => {
     const src = renderer();
-    // The native select stays the source of truth the run path reads verbatim.
+    // The hidden input stays the source of truth the run path reads verbatim.
     expect(src).toContain('el("model-select")');
-    // A pick that an active cost filter would hide is pinned back in, so the
-    // model the user chose can only change when the user changes it.
-    expect(src).toContain("(current) ");
+    // The selected model is always kept visible at the top of the list even
+    // when filters would hide it — the combobox pins it rather than using a
+    // "(current) " prefix (B2 redesign). The invariant is preserved.
+    expect(src).toContain("state.selected");
     // Live search + the optional cost filter + refresh are all wired.
     expect(src).toContain("model-search");
     expect(src).toContain("model-cost-filter");
@@ -292,6 +302,18 @@ describe("listModels", () => {
     expect(posture.budgetUsd).toBe(0);
     expect(posture.policy).toBe("PREFERRED_FREE");
     expect(posture.note.length).toBeGreaterThan(0);
+  });
+
+  it("carries the capability ids each model may serve (D35)", () => {
+    const f = stack();
+    const byId = Object.fromEntries(f.listModels().map((m) => [m.id, m]));
+    // The three built-in models each advertise the role they exist for.
+    expect(byId["local/agent"]!.capabilities).toContain("CODING");
+    expect(byId["local/deterministic"]!.capabilities).toContain("FAST_TASK");
+    expect(byId["local/vision"]!.capabilities).toContain("VISION");
+    // The capability list is JSON-safe and contains no secret material.
+    const json = JSON.stringify(f.listModels());
+    expect(json).not.toMatch(/secret|password|apiKey|token/i);
   });
 });
 
