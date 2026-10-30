@@ -8,9 +8,11 @@
  * single network seam, and the cost settlement.
  *
  * Under the frozen defaults this reaches only the deterministic local agent
- * model — deny-all egress, FREE_ONLY, and a zero budget make a remote call
- * impossible even to begin. A user must explicitly allowlist a host, register
- * a provider, and grant any required approval for anything else to answer.
+ * model — deny-all egress, a zero budget, and no registered remote provider
+ * make a remote call impossible even to begin. The cost policy no longer
+ * pre-blocks paid models (PREFERRED_FREE permits them), but the budget gate
+ * still refuses any spend, so a paid model is eligible yet never executable
+ * until a user explicitly sets a budget and registers a provider.
  *
  * What this gateway does NOT do, because the interface forbids it and the
  * engine has no path for it: execute a tool, or approve one. It carries the
@@ -84,10 +86,14 @@ export class ProviderModelGateway implements ModelGateway {
           // that only understand `inputs` — the deterministic local model —
           // ignore this and keep reading `text`, so nothing changes for them.
           messages: buildMessages(request),
-          tools: true,
+          // Forward the actual tools requirement instead of hardcoding `true`:
+          // a compare slot in INSPECT mode carries no visible tools, but the
+          // selector still gated on `tools: true` and rejected models like
+          // local/deterministic that have `tools: false`.
+          tools: request.tools.length > 0,
           structuredOutput: false,
           toolDeclarations: request.tools.map(toDeclaration),
-          preference: this.opts.preference,
+          preference: request.preference ?? this.opts.preference,
           // D11: opt-in streaming. Keeps the same result contract; events only
           // travel if the caller's InvokeOptions carry an onStreamEvent.
           streaming: request.streaming === true,
@@ -103,14 +109,19 @@ export class ProviderModelGateway implements ModelGateway {
         // D27: straight off the settled outcome. `committedUsd` is the same
         // number the budget ledger already committed, so the accounting a run
         // reports can never disagree with what the ledger was charged.
+        // D30: the token counts ride on the settled result itself, so a
+        // buffered turn — which never emits a usage frame into a stream — is
+        // accounted as faithfully as a streamed one. The D27 stream capture
+        // stays as a fallback for any adapter that reports usage only through
+        // the sink.
         accounting: {
           modelId: result.modelId,
           adapterId: outcome.adapterId,
           capability: result.capability,
           committedUsd: Math.max(0, outcome.committedUsd),
           latencyMs: result.latencyMs,
-          promptTokens,
-          completionTokens,
+          promptTokens: result.promptTokens ?? promptTokens,
+          completionTokens: result.completionTokens ?? completionTokens,
         },
       };
     } catch (e) {

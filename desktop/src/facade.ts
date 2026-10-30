@@ -17,11 +17,27 @@
  */
 import { WorkflowLoop } from "../../src/workflow/index.ts";
 import type { WorkflowResult } from "../../src/workflow/index.ts";
+import { CollaborateOrchestrator } from "../../src/collab/index.ts";
+import type {
+  CollaborateParticipant,
+  CollaborateRequest,
+  CollaborateResult,
+  CollaborateSynthesis,
+} from "../../src/collab/types.ts";
+// Re-exported so the IPC seam (`ipc-requests.ts`) can name the participant
+// type without reaching back into the core from the desktop boundary.
+export type { CollaborateParticipant };
 import type { ModelRole } from "../../src/registry/roles.ts";
 import type { SafetyMode } from "../../src/safety/guard.ts";
 import type { ApprovalRecord } from "../../src/registry/approvals.ts";
 import type { BudgetSnapshot } from "../../src/registry/budget.ts";
 import type { DesktopStack } from "./desktop-stack.ts";
+import type {
+  ArtifactEntry,
+  ArtifactStore,
+  ReadArtifact,
+} from "../../src/artifacts/store.ts";
+import { type TextAnalyzer } from "../../src/vision/text-analyzer.ts";
 import type {
   DesktopSettings,
   LogRecord,
@@ -30,12 +46,15 @@ import type {
   SettingsProvider,
 } from "./persistence/types.ts";
 import type { ToolRequest, ToolResult } from "../../src/tools/types.ts";
+import type { StreamEvent } from "../../src/execution/types.ts";
 import type { ToolAuditRecord } from "../../src/tools/audit.ts";
 import type { ApprovalRecord as ToolApprovalEntry } from "./tools/approver.ts";
 import type { AgentRequest, AgentResult } from "../../src/agent/index.ts";
 import { toolsVisibleInMode } from "../../src/agent/index.ts";
+import { isAllInOneError } from "../../src/errors.ts";
 import { sanitizeProvider } from "./persistence/settings-store.ts";
 import { resolveBearerToken } from "../../src/execution/secrets.ts";
+import type { MediaRequest, MediaResult } from "../../src/media/types.ts";
 
 export interface DiagnosticRequest {
   readonly mode: SafetyMode;
@@ -63,6 +82,60 @@ export interface DiagnosticResult {
   readonly pausedForHuman: boolean;
   readonly escalated: boolean;
   readonly errorCode?: string;
+}
+
+/**
+ * One selected model's outcome in a multi-model comparison. `requestedModel`
+ * is the `provider/model` the UI chose; `executedModel` is the catalogue id
+ * the engine actually ran (absent when the run never reached the engine).
+ * The two are surfaced together so a UI can flag any mismatch — the contract
+ * never silently re-points a requested model at a substitute. `error` is set
+ * when this slot failed; the other slots are unaffected by it.
+ */
+export interface ManyModelResult {
+  readonly requestedModel: string;
+  readonly executedModel?: string;
+  readonly ok: boolean;
+  readonly text?: string;
+  readonly escalated: boolean;
+  readonly pausedForHuman: boolean;
+  readonly runId: string;
+  /** D35: the batch id this slot belongs to. Carried so the renderer can poll
+   *  `getCompareProgress` without reconstructing it from the run ids. */
+  readonly batchId: string;
+  readonly error?: { readonly code: string; readonly message: string };
+}
+
+/**
+ * D34: the Collaborate contracts. These are re-exported from the core
+ * (`src/collab/types.ts`) rather than re-declared: the desktop boundary is a
+ * consumer, not an owner, of the collaborate shape, and re-declaring it is how
+ * a field drifts out of sync with the orchestrator that actually enforces it.
+ * The IPC mapping in `ipc-requests.ts` — the seam between the renderer's raw
+ * payload and the facade — stays exercisable in CI, exactly like D29's
+ * `DiagnosticRequest`.
+ */
+export type { CollaborateRequest, CollaborateResult, CollaborateSynthesis };
+
+/**
+ * One comparison batch. The request type is named (not inlined) so the IPC
+ * mapping in `ipc-requests.ts` — the seam between the renderer's raw payload
+ * and the facade — stays exercisable in CI, exactly like D29's
+ * `DiagnosticRequest` pattern.
+ */
+export interface ManyModelRequest {
+  /** Stable batch id; slots get runIds `${batchId}-${i}`. Generated when absent. */
+  readonly batchId?: string;
+  readonly prompt: string;
+  /** Each entry is a composite catalogue id, `provider/model`. */
+  readonly modelIds: readonly string[];
+  readonly mode?: AgentRequest["mode"];
+  readonly auto?: AgentRequest["auto"];
+  readonly timeoutMs?: number;
+  /** How many models may run at once; clamped to [1, modelIds.length]. */
+  readonly concurrency?: number;
+  /** Request progressive streaming frames; each slot's bridge is per runId. */
+  readonly streaming?: boolean;
 }
 
 /**
@@ -198,6 +271,108 @@ export class DesktopFacade {
 
   getRun(id: string): RunRecord | undefined {
     return this.stack.runStore.get(id);
+  }
+
+  // ---- artifacts (D35) -----------------------------------------------
+
+  /** Every stored artifact, newest first. Read-only; the base path never leaves main. */
+  listArtifacts(): ReadonlyArray<ArtifactEntry> {
+    return this.stack.artifacts.list();
+  }
+
+  /** Read an artifact's bytes by id. The id is content-addressed and regex-validated on the store side. */
+  getArtifact(artifactId: string): ReadArtifact {
+    return this.stack.artifacts.read(artifactId);
+  }
+
+  /**
+   * Prepare an artifact for download. Returns the on-disk path AND a base64
+   * payload small enough to cross IPC without choking the main↔renderer
+   * bridge; large artifacts stream through the file path instead. The
+   * renderer never supplies the path — it receives one.
+   */
+  downloadArtifact(artifactId: string): { readonly artifactId: string; readonly path: string; readonly bytes: Uint8Array } {
+    const artifact = this.stack.artifacts.read(artifactId);
+    return { artifactId, path: artifact.path, bytes: artifact.bytes };
+  }
+
+  /**
+   * Persist a file the user picked in the OS dialog. The renderer supplies
+   * bytes + a content type + an optional run id; main owns the dialog and
+   * the store confines the write to paths.artifacts. The returned id is the
+   * content-addressed key the renderer uses for every later read/download.
+   */
+  uploadFile(input: {
+    readonly bytes: Uint8Array;
+    readonly contentType: string;
+    readonly runId?: string;
+    readonly labels?: Record<string, string>;
+  }): { readonly artifactId: string } {
+    const stored = this.stack.artifacts.store({
+      kind: "capture",
+      bytes: Buffer.from(input.bytes),
+      contentType: input.contentType,
+      runId: input.runId ?? `upload-${Date.now()}`,
+      labels: input.labels,
+    });
+    return { artifactId: stored.metadata.artifactId };
+  }
+
+  /**
+   * Analyze an uploaded image. The bytes come from the artifact store (the
+   * renderer never supplies raw bytes over IPC for anything but an explicit
+   * upload), so the id is the same one `uploadFile` returned. The VISION role
+   * routes through the frozen PREFERRED_FREE policy; a zero-budget install
+   * still analyzes for free via the deterministic fake. No credential is read.
+   */
+  async analyzeImage(artifactId: string): Promise<unknown> {
+    const artifact = this.stack.artifacts.read(artifactId);
+    const outcome = await this.stack.vision.analyze({
+      imageBytes: artifact.bytes,
+      mimeType: artifact.metadata.contentType,
+      sourceArtifactId: artifactId,
+    });
+    return outcome;
+  }
+
+  /**
+   * Analyze an uploaded file by content type. The bytes come from the artifact
+   * store (the renderer never supplies raw bytes over IPC for anything but an
+   * explicit upload), so the id is the same one `uploadFile` returned.
+   *
+   *   - image/*  → the VISION path (deterministic fake, zero budget);
+   *   - text/*  → local decode + summary, no network, no credential;
+   *   - anything else → reported as binary, never analyzed.
+   *
+   * No external API is called and no credential is read for any branch.
+   */
+  async analyzeFile(artifactId: string): Promise<unknown> {
+    const artifact = this.stack.artifacts.read(artifactId);
+    const ct = artifact.metadata.contentType.toLowerCase().split(";")[0]?.trim() ?? "";
+    if (ct.startsWith("image/")) {
+      return await this.stack.vision.analyze({
+        imageBytes: artifact.bytes,
+        mimeType: artifact.metadata.contentType,
+        sourceArtifactId: artifactId,
+      });
+    }
+    if (ct.startsWith("text/")) {
+      return this.stack.text.analyze({
+        bytes: artifact.bytes,
+        contentType: artifact.metadata.contentType,
+        sourceArtifactId: artifactId,
+      });
+    }
+    return {
+      provider: "local-text",
+      model: "text-decoder-1",
+      contentType: artifact.metadata.contentType,
+      charset: "binary",
+      bytes: artifact.metadata.bytes,
+      lines: 0,
+      summary: `${artifact.metadata.bytes} bytes of ${artifact.metadata.contentType} — not a decodable text or image; no analysis performed`,
+      warnings: ["content type is neither image/* nor text/*"],
+    };
   }
 
   /**
@@ -421,6 +596,35 @@ export class DesktopFacade {
     return this.stack.cancellation.cancel(runId);
   }
 
+  // ---- run management (D35) -------------------------------------------
+
+  /**
+   * Rename a run. The display name is cosmetic: the pipeline keys off `id` and
+   * `subject`, so a rename never changes what a re-run does. Returns false when
+   * the run does not exist.
+   */
+  renameRun(runId: string, name: string): boolean {
+    return this.stack.runStore.rename(runId, name);
+  }
+
+  /**
+   * Delete a run record. Returns false when the run does not exist. Deleting a
+   * record does not delete its artifacts — the artifact store sweeps on its own
+   * retention schedule — and it does not touch the usage ledger, which keeps
+   * accounting for invocations that already happened.
+   */
+  removeRun(runId: string): boolean {
+    return this.stack.runStore.remove(runId);
+  }
+
+  /**
+   * Search runs by subject or display name. Case-insensitive substring match;
+   * an empty query returns every run, newest first, like `listRuns`.
+   */
+  searchRuns(query: string): readonly RunRecord[] {
+    return this.stack.runStore.search(query);
+  }
+
   // ---- approvals ------------------------------------------------------
 
   listApprovals(): readonly ApprovalRecord[] {
@@ -590,8 +794,26 @@ export class DesktopFacade {
 
     let dataArray: unknown[] = [];
     try {
-      const parsed = JSON.parse(rawBody) as { data?: unknown };
-      if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.data)) {
+      const parsed = JSON.parse(rawBody) as unknown;
+      // Two shapes are accepted. OpenAI-compatible gateways return
+      // `{ data: [{ id, ... }, ...] }`; the Anthropic-compatible FCC local
+      // gateway returns a bare array of `{ id, ... }` objects. A bare array
+      // is accepted only for the `anthropic` protocol, so a hostile or
+      // misconfigured endpoint can never smuggle a model list through as one.
+      if (Array.isArray(parsed)) {
+        if (provider.protocol !== "anthropic") {
+          return {
+            ok: false,
+            code: "PROVIDER_CALL_FAILED",
+            detail: "Endpoint returned a bare JSON array, which only the `anthropic` protocol accepts as a models list",
+            endpoint: provider.endpoint,
+            models: probed,
+          };
+        }
+        dataArray = parsed;
+      } else if (parsed && typeof parsed === "object" && Array.isArray((parsed as { data?: unknown }).data)) {
+        dataArray = (parsed as { data: unknown[] }).data;
+      } else {
         return {
           ok: false,
           code: "PROVIDER_CALL_FAILED",
@@ -600,7 +822,6 @@ export class DesktopFacade {
           models: probed,
         };
       }
-      dataArray = parsed.data;
     } catch {
       return {
         ok: false,
@@ -629,15 +850,54 @@ export class DesktopFacade {
     };
   }
 
+  /**
+   * D7 "dynamic model list": fetch the catalogue a gateway advertises at
+   * `GET <endpoint>/models` without registering anything. The result is a
+   * plain list the renderer can show or use to pre-fill a provider form; the
+   * provider itself is only registered when the user explicitly saves it.
+   */
+  async discoverModels(input: {
+    readonly endpoint: string;
+    readonly protocol?: string;
+    readonly apiKeyEnv?: string | null;
+    readonly maxModels?: number;
+  }): Promise<{
+    ok: boolean;
+    count: number;
+    detail: string;
+    models: Array<{ id: string; displayName: string; streaming?: boolean }>;
+  }> {
+    const { discoverProviderModels } = await import("../../src/execution/user-providers.ts");
+    const result = await discoverProviderModels({
+      endpoint: input.endpoint,
+      protocol: input.protocol,
+      apiKeyEnv: input.apiKeyEnv ?? null,
+      maxModels: input.maxModels,
+    });
+    return {
+      ok: result.models.length > 0,
+      count: result.models.length,
+      detail:
+        result.models.length > 0
+          ? `Gateway advertised ${result.models.length} model(s).`
+          : `No models discovered: ${result.warnings.join("; ") || "unknown error"}`,
+      models: result.models.map((m) => ({ id: m.id, displayName: m.displayName ?? m.id, streaming: m.streaming === true })),
+    };
+  }
+
   patchSettings(patch: Partial<DesktopSettings>): DesktopSettings {
     const before = this.stack.settingsStore.get();
     const saved = this.stack.settingsStore.patch(patch);
-    // D10: a change to the provider list takes effect immediately — this
-    // rebuilds only the provider-dependent core and swaps it in atomically.
-    // In-flight invocations keep their original engine; new ones see the new
-    // catalogue, egress, and adapters. If the rebuild fails, the error
-    // propagates and the previous core stays.
-    if ("providers" in patch && JSON.stringify(before.providers) !== JSON.stringify(saved.providers)) {
+    // D10: a change to the provider list OR the spend budget takes effect
+    // immediately — this rebuilds the provider-dependent core and swaps it in
+    // atomically. In-flight invocations keep their original engine; new ones
+    // see the new catalogue, egress, adapters, and budget. If the rebuild
+    // fails, the error propagates and the previous core stays.
+    const budgetChanged = "budgetUsd" in patch && before.budgetUsd !== saved.budgetUsd;
+    if (
+      ("providers" in patch && JSON.stringify(before.providers) !== JSON.stringify(saved.providers)) ||
+      budgetChanged
+    ) {
       this.stack.reloadProviders();
     }
     return saved;
@@ -782,6 +1042,10 @@ export class DesktopFacade {
       id: request.runId,
       kind: "agent",
       mode: request.mode,
+      // D35: the model composite the run was asked to use. A compare slot
+      // carries it so a progress poll can label each card by the model it
+      // asked for; a run with no preference leaves it absent.
+      model: request.preference ? `${request.preference.provider}/${request.preference.modelId}` : undefined,
       // The Runs list labels the run by the prompt it opened with; a steering
       // prompt on a continuation does not relabel the run.
       subject: continuation ? prior!.subject : agentSubject(request.prompt),
@@ -822,7 +1086,9 @@ export class DesktopFacade {
       this.stack.runStore.save();
       throw e;
     } finally {
-      this.stack.usageStore.save();
+      // `recordAgentOutcome` (success) and the `catch` block each save the
+      // usage store themselves, so a blanket save here would double-write on
+      // every settled turn. Release the cancellation slot either way.
       this.stack.cancellation.release(request.runId);
       // A cancelled run leaves any raised approval DANGLING: denial is the
       // conservative end state so no decision it raised can outlive it.
@@ -837,11 +1103,416 @@ export class DesktopFacade {
   }
 
   /**
-   * D27: persist an agent run's outcome and the accounting for the turns this
-   * call settled. The run becomes visible in the Runs view, and its spend
-   * becomes visible in the usage store — the budget ledger was already charged
-   * by the engine, so this is what keeps the accounting and the ledger agreed.
+   * Multi-model comparison primitive — REAL execution, not a display.
+   *
+   * Drives one independent agent run PER selected model, each bound to its own
+   * `preference` (the exact `provider/model` the UI chose) and its own runId,
+   * through a bounded concurrency pool. Every run goes through the whole gated
+   * pipeline — SELECT honours the preference, a paid or unknown-priced model
+   * still passes the cost APPROVAL and the budget RESERVE, egress is unchanged
+   * — so nothing here bypasses a gate. One model's failure is isolated to its
+   * own slot: it can never discard another model's successful answer, and each
+   * slot carries both the requested model and the model that actually executed,
+   * so an answer can never be silently attributed to the wrong model.
    */
+  async runMany(input: ManyModelRequest): Promise<readonly ManyModelResult[]> {
+    // A duplicated selection is one answer asked twice, not two — dedup keeps
+    // the first occurrence's position (so a later slot never inherits an
+    // earlier runId's neighbour index) and drops the repeat. Each slot is a
+    // full gated run, so a duplicate is also a duplicate of the cost.
+    const modelIds: string[] = [];
+    const seen = new Set<string>();
+    for (const c of input.modelIds ?? []) {
+      if (typeof c !== "string" || !c.includes("/")) continue;
+      if (seen.has(c)) continue;
+      seen.add(c);
+      modelIds.push(c);
+    }
+    if (modelIds.length === 0) {
+      throw new Error("runMany: at least one provider/model id is required");
+    }
+    const base = input.batchId || "cmp-" + Date.now().toString(36);
+    const slots = modelIds.map((composite, i) => ({ composite, i, runId: `${base}-${i}` }));
+    const results: ManyModelResult[] = new Array(slots.length);
+    const concurrency = Math.max(1, Math.min(Math.round(input.concurrency ?? 3) || 3, slots.length));
+    const mode = input.mode ?? "INSPECT";
+    let cursor = 0;
+
+    const worker = async (): Promise<void> => {
+      while (cursor < slots.length) {
+        const idx = cursor;
+        cursor += 1;
+        const s = slots[idx];
+        const slash = s.composite.indexOf("/");
+        const preference = {
+          provider: s.composite.slice(0, slash),
+          modelId: s.composite.slice(slash + 1),
+        };
+        const req: AgentRequest = {
+          runId: s.runId,
+          prompt: input.prompt,
+          mode,
+          auto: input.auto,
+          timeoutMs: input.timeoutMs,
+          // Each slot streams under its own runId, so a busy batch never mixes
+          // two models' progressive frames on one bridge key.
+          streaming: input.streaming === true,
+          preference,
+        };
+        try {
+          const r = await this.runAgent(req);
+          results[s.i] = {
+            requestedModel: s.composite,
+            executedModel: r.model,
+            ok: r.ok,
+            text: r.ok ? r.text : undefined,
+            escalated: r.escalated,
+            pausedForHuman: r.pausedForHuman,
+            runId: s.runId,
+            batchId: base,
+            error: r.error ? { code: r.error.code, message: r.error.message } : undefined,
+          };
+        } catch (e) {
+          const err = e as { code?: string; message?: string };
+          results[s.i] = {
+            requestedModel: s.composite,
+            executedModel: undefined,
+            ok: false,
+            text: undefined,
+            escalated: false,
+            pausedForHuman: false,
+            runId: s.runId,
+            batchId: base,
+            error: {
+              code: err.code ?? "AGENT_FAILED",
+              message: (err.message ?? "unknown error").slice(0, 280),
+            },
+          };
+        }
+      }
+    };
+
+    const workers: Promise<void>[] = [];
+    for (let w = 0; w < concurrency; w++) workers.push(worker());
+    await Promise.all(workers);
+    return results;
+  }
+
+  /**
+   * D35: live progress for a collaboration that is still in flight. The
+   * renderer polls this while a collab runs so a long orchestration shows
+   * live participant status instead of a frozen card. Pull-only, like every
+   * other read channel here; it never starts, cancels, or mutates a run.
+   */
+  getCollabProgress(runId: string): {
+    readonly runId: string;
+    readonly status: RunRecord["status"];
+    readonly participants: ReadonlyArray<{
+      readonly participantId: string;
+      readonly provider: string;
+      readonly modelId: string;
+      readonly ok: boolean | null;
+      readonly text: string | undefined;
+    }>;
+  } {
+    const record = this.stack.runStore.get(runId);
+    if (!record) {
+      return { runId, status: "running", participants: [] };
+    }
+    const envelope = this.stack.workflowStreamBridge.getSince(runId, 0);
+    const frames = envelope?.events ?? [];
+    const byParticipant = new Map<string, { ok: boolean | null; text: string | undefined }>();
+    for (const frame of frames) {
+      const pid = (frame as { participantId?: string }).participantId;
+      if (!pid) continue;
+      const prior = byParticipant.get(pid) ?? { ok: null, text: undefined };
+      const kind = (frame as { kind?: string }).kind;
+      // A `finish` frame means the participant's turn ended. For deterministic
+      // local models this is the terminal event; a remote provider may also
+      // emit `usage` afterwards, which is a stronger success signal. Either
+      // one marks the participant settled; neither is present until the turn
+      // actually ended, so a mid-flight participant stays null.
+      if (kind === "finish" || kind === "usage") {
+        byParticipant.set(pid, { ok: true, text: prior.text });
+      } else if (kind === "text" && typeof (frame as { text?: string }).text === "string") {
+        byParticipant.set(pid, { ok: prior.ok, text: (prior.text ?? "") + (frame as { text: string }).text });
+      }
+    }
+    const participants = record.participants
+      ? record.participants.map((p) => {
+          const live = byParticipant.get(p.id);
+          if (live) {
+            return {
+              participantId: p.id,
+              provider: p.provider,
+              modelId: p.modelId,
+              ok: live.ok,
+              text: live.text,
+            };
+          }
+          // No live stream frame for this participant. That is normal when
+          // the collaboration was not requested with `streaming`, because the
+          // orchestrator only tags frames with a participantId when streaming
+          // is on — without this fallback every settled non-streaming collab
+          // would report `ok: null` forever. Derive the outcome from the run's
+          // own status instead: a completed run means every declared
+          // participant settled, a failed or cancelled one means none did.
+          const settled = record.status === "completed";
+          return {
+            participantId: p.id,
+            provider: p.provider,
+            modelId: p.modelId,
+            ok: settled ? true : record.status === "running" ? null : false,
+            text: undefined,
+          };
+        })
+      : [];
+    return { runId, status: record.status, participants };
+  }
+
+  /**
+   * D35: live progress for a comparison that is still in flight. A compare run
+   * is N independent gated agent runs under one batch id; this maps each slot
+   * back to the model it asked for and the live stream it is streaming under,
+   * so a poll mid-flight shows per-model status instead of a frozen card.
+   * Pull-only, like every other read channel here.
+   *
+   * The batch id is the `base` passed to `runMany` (or generated there); the
+   * renderer learns it from the `runId` each slot carries on its result.
+   */
+  getCompareProgress(batchId: string): {
+    readonly batchId: string;
+    readonly status: "running" | "completed" | "failed";
+    readonly slots: ReadonlyArray<{
+      readonly runId: string;
+      readonly requestedModel: string;
+      readonly ok: boolean | null;
+      readonly text: string | undefined;
+      readonly error?: { readonly code: string; readonly message: string };
+    }>;
+  } {
+    // Every run whose id starts with the batch prefix is a slot of this batch.
+    const prefix = `${batchId}-`;
+    const slots = this.stack.runStore
+      .list()
+      .filter((r) => r.id.startsWith(prefix))
+      .map((r) => {
+        const envelope = this.stack.streamBridge.getSince(r.id, 0);
+        const frames = envelope?.events ?? [];
+        let ok: boolean | null = null;
+        let text: string | undefined;
+        let error: { code: string; message: string } | undefined;
+        // Stream frames are the live path; when streaming was not requested
+        // the bridge is empty and we fall back to the deliverable stored on
+        // the run record.
+        for (const frame of frames) {
+          const kind = (frame as { kind?: string }).kind;
+          if (kind === "finish" || kind === "usage") {
+            ok = true;
+          } else if (kind === "text" && typeof (frame as { text?: string }).text === "string") {
+            text = (text ?? "") + (frame as { text: string }).text;
+          }
+        }
+        if (envelope?.state === "failed") {
+          ok = false;
+          error = envelope.error;
+        }
+        if (r.status === "completed") ok = true;
+        if (r.status === "failed" || r.status === "cancelled") ok = false;
+        text = text ?? r.deliverable;
+        // A cancelled or failed run carries its typed code on the record even
+        // when the stream bridge has no error envelope to report.
+        if (!error && (r.status === "failed" || r.status === "cancelled") && r.errorCode) {
+          error = { code: r.errorCode, message: r.errorCode };
+        }
+        return {
+          runId: r.id,
+          // The run record's `model` is the composite the slot was asked for;
+          // a compare slot always carries one. Fall back to the subject only
+          // when the record genuinely has neither, and never to `undefined` —
+          // the renderer labels each card by what it asked for, and
+          // "undefined" is not a label.
+          requestedModel: r.model ?? (r.subject ? r.subject : "—"),
+          ok,
+          text,
+          error,
+        };
+      });
+    const status: "running" | "completed" | "failed" =
+      slots.length === 0 ? "running"
+      : slots.every((s) => s.ok === true) ? "completed"
+      : slots.some((s) => s.ok === false) ? "failed"
+      : "running";
+    return { batchId, status, slots };
+  }
+
+  /**
+   * D34: run a configurable multi-model collaboration through the full core
+   * pipeline. Each participant is an independent, fully-gated specialist run;
+   * the orchestrator owns the strategy (parallel / sequential / debate), the
+   * pairwise reconciliation, and the optional synthesis. Nothing here bypasses
+   * a gate: every participant goes through the specialist runner, hence the P4
+   * engine, hence SELECT, VALIDATE, EGRESS, APPROVAL, RESERVE, INVOKE and
+   * SETTLE. Cancellation is the same hub the diagnostic path uses, so
+   * `cancelRun(runId)` ends a collaboration exactly as it ends a workflow.
+   */
+  async runCollab(request: CollaborateRequest): Promise<CollaborateResult> {
+    const runId = typeof request.runId === "string" && request.runId.trim().length > 0
+      ? request.runId.trim()
+      : `collab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const streaming = request.streaming === true;
+    const signal = this.stack.cancellation.signalFor(runId);
+
+    this.stack.runStore.record({
+      id: runId,
+      kind: "collab",
+      mode: request.mode,
+      subject: request.task,
+      startedAt: Date.now(),
+      status: "running",
+      ok: false,
+      iterations: request.participants.length,
+      pausedForHuman: false,
+      escalated: false,
+      participants: request.participants.map((p) => ({
+        id: p.id,
+        provider: p.provider,
+        modelId: p.modelId,
+      })),
+    });
+
+    if (streaming) this.stack.workflowStreamBridge.start(runId);
+
+    // Tag every progressive frame with the participant that emitted it, so the
+    // renderer can route it to the right card without re-parsing text.
+    const appendEvent = (e: StreamEvent & { participantId: string }): void =>
+      this.stack.workflowStreamBridge.append(runId, e);
+
+    let result: CollaborateResult;
+    try {
+      result = await new CollaborateOrchestrator({
+        runner: this.stack.core.runner,
+        request: { ...request, runId, signal } as CollaborateRequest,
+        onStreamEvent: streaming ? appendEvent : undefined,
+      }).run();
+    } catch (e) {
+      const err = isAllInOneError(e) ? e : null;
+      result = {
+        ok: false,
+        runId,
+        strategy: request.strategy,
+        participants: [],
+        error: {
+          code: err?.code ?? "COLLAB_FAILED",
+          message: err?.message ?? (e instanceof Error ? e.message : String(e)),
+          retryable: err?.retryable ?? false,
+        },
+      };
+    }
+
+    const cancelled = signal.aborted;
+    const status: RunRecord["status"] = cancelled
+      ? "cancelled"
+      : result.ok
+        ? "completed"
+        : "failed";
+    this.stack.runStore.update(runId, {
+      finishedAt: Date.now(),
+      status,
+      ok: result.ok && !cancelled,
+      errorCode: cancelled ? "COLLAB_CANCELLED" : result.error?.code,
+      deliverable: result.synthesis?.text ?? this.concatDeliverable(result),
+    });
+
+    // One usage record per participant that settled an invocation, keyed by
+    // its position so two participants never collide and no participant is
+    // accounted twice. `committedUsd` is the same number the budget ledger
+    // committed; token counts ride on the outcome and are absent when the
+    // provider reported none — never estimated.
+    result.participants.forEach((p, index) => {
+      const a = p.accounting;
+      if (!a) return;
+      this.stack.usageStore.record({
+        id: `usage-${runId}-${index}`,
+        runId,
+        ts: Date.now(),
+        modelId: a.modelId,
+        capability: a.capability,
+        adapterId: a.adapterId,
+        promptTokens: a.promptTokens,
+        completionTokens: a.completionTokens,
+        costUsd: Math.max(0, a.committedUsd),
+        latencyMs: a.latencyMs,
+        outcome: cancelled ? "cancelled" : p.ok ? "ok" : "failed",
+        errorCode: p.ok ? undefined : p.error?.code,
+      });
+    });
+
+    this.stack.usageStore.save();
+    this.stack.runStore.save();
+    this.stack.cancellation.release(runId);
+    if (cancelled) {
+      for (const pending of this.stack.toolApprover.listPending()) {
+        if (pending.runId === runId) {
+          this.stack.toolApprover.deny(pending.id, "run cancelled by the caller");
+        }
+      }
+    }
+    return result;
+  }
+
+  private concatDeliverable(result: CollaborateResult): string {
+    const parts = result.participants
+      .filter((p) => p.ok && p.text)
+      .map((p) => `[${p.participant.id} (${p.participant.role})]\n${p.text}`);
+    if (parts.length === 0) return "";
+    const lines = [`[all-in-1 collaborate] ${result.participants.length} participants`];
+    if (result.disagreements && result.disagreements.length > 0) {
+      lines.push("", "disagreements:");
+      for (const d of result.disagreements) {
+        lines.push(`- ${d.between[0]} vs ${d.between[1]} on "${d.field}": ${d.a} vs ${d.b}`);
+      }
+    }
+    lines.push("", ...parts);
+    return lines.join("\n");
+  }
+
+  // ---- media (P1-6) -------------------------------------------------
+
+  /**
+   * Generate media (image, video, …) through the gated router. The media
+   * gate runs BEFORE any provider lookup or transport call, so a disabled
+   * config short-circuits with MEDIA_DISABLED and no credential is ever read.
+   * Generated artifacts land in the content-addressed store; the renderer
+   * reads them back by id, never by path.
+   */
+  async generateImage(req: MediaRequest, runId: string): Promise<MediaResult> {
+    // The renderer cannot pass an AbortSignal over IPC, so the desktop stack
+    // owns a per-call controller. Pull it here; if the human cancels the run
+    // mid-flight, the adapter aborts the fetch and the router releases the
+    // budget reservation. The controller is cleaned up whether the call
+    // succeeds, fails, or is cancelled.
+    const signal = this.stack.mediaSignals.signalFor(runId);
+    try {
+      return await this.stack.media.execute({ ...req, signal }, runId);
+    } finally {
+      // The controller is cleaned up whether the call succeeds, fails, or is
+      // cancelled — a throw here must not leak the AbortController.
+      this.stack.mediaSignals.cancel(runId);
+    }
+  }
+
+  /**
+   * D35: cancel an in-flight media generation. The desktop stack owns the
+   * abort controller; this just triggers it. A cancelled attempt is never
+   * retried — the adapter throws a typed `cancelled` media error and the
+   * router releases the budget reservation.
+   */
+  cancelMediaRun(runId: string): boolean {
+    return this.stack.mediaSignals.cancel(runId);
+  }
+
+  // ---- models & providers (D5) --------------------------------------
   private recordAgentOutcome(runId: string, result: AgentResult, aborted: boolean): void {
     const cancelled = aborted || result.error?.code === "AGENT_CANCELLED";
     const status: RunRecord["status"] = cancelled ? "cancelled" : result.ok ? "completed" : "failed";
@@ -938,6 +1609,9 @@ export class DesktopFacade {
     readonly tools: boolean;
     /** Whether the descriptor advertises a streaming response (D11). */
     readonly streaming: boolean;
+    /** Capability ids this model may serve (D35). The selector shows these so
+     *  the human can see WHY a model is or is not offered for a role. */
+    readonly capabilities: readonly string[];
   }> {
     return this.stack.core.stack.catalog.snapshot().map((m) => ({
       id: m.id,
@@ -951,6 +1625,7 @@ export class DesktopFacade {
       fixed: Boolean(m.fixed),
       tools: m.tools,
       streaming: m.streaming,
+      capabilities: m.capabilities,
     }));
   }
 
@@ -969,6 +1644,8 @@ export class DesktopFacade {
     readonly apiKeyEnv: string | null;
     /** true/false when a key is needed; null when the endpoint needs none. */
     readonly credentialPresent: boolean | null;
+    /** Wire protocol the adapter was registered with. */
+    readonly protocol: string;
     readonly models: readonly string[];
   }> {
     const settings = this.stack.settingsStore.get();
@@ -990,6 +1667,7 @@ export class DesktopFacade {
         registered: this.stack.core.stack.adapters.has(p.id),
         apiKeyEnv: p.apiKeyEnv ?? null,
         credentialPresent: p.apiKeyEnv ? this.stack.credentials.has(p.apiKeyEnv) : null,
+        protocol: p.protocol ?? "openai-compatible",
         models: (p.models ?? []).map((m) => m.id),
       };
     });
@@ -1004,22 +1682,23 @@ export class DesktopFacade {
   } {
     const providers = this.stack.settingsStore.get().providers;
     const allowlist = this.stack.core.stack.egress.allowlist;
+    const budgetUsd = this.stack.budget.snapshot().budgetUsd;
     if (providers.length === 0) {
       return {
         egress: this.stack.core.stack.egress.kind,
-        budgetUsd: this.stack.budget.snapshot().budgetUsd,
-        policy: "FREE_ONLY",
+        budgetUsd,
+        policy: "PREFERRED_FREE",
         note:
-          "Only local, zero-cost models are reachable: egress is deny-all, the budget is 0, and the cost policy is FREE_ONLY. No credential is read and no host is contacted.",
+          "Free models are selected first; a paid model is selectable but needs an explicit approval and a non-zero budget. Egress is deny-all and the budget is 0 by default, so no remote model can execute until the human registers a provider and raises the budget from Settings.",
       };
     }
     const hosts = allowlist.length > 0 ? allowlist.join(", ") : "loopback only";
     return {
       egress: this.stack.core.stack.egress.kind,
-      budgetUsd: this.stack.budget.snapshot().budgetUsd,
-      policy: "FREE_ONLY",
+      budgetUsd,
+      policy: "PREFERRED_FREE",
       note:
-        `${providers.length} user-registered provider(s): ${providers.map((p) => p.id).join(", ")}. Egress is open to ${hosts}; the budget stays ${this.stack.budget.snapshot().budgetUsd} USD and the cost policy stays FREE_ONLY, so a paid model remains unselectable until the human lifts both.`,
+        `${providers.length} user-registered provider(s): ${providers.map((p) => p.id).join(", ")}. Egress is open to ${hosts}; the cost policy is PREFERRED_FREE (free first, paid with approval). The spend budget is ${budgetUsd} USD — raise it from Settings to permit paid models.`,
     };
   }
 }

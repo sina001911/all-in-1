@@ -2,7 +2,11 @@
  * Cost policy + pricing primitives.
  *
  * Frozen defaults (see docs/frozen-defaults.md):
- * - FREE_ONLY is the default policy.
+ * - PREFERRED_FREE is the default policy. Free models are still selected first,
+ *   but a paid model is no longer pre-blocked at the policy layer: it is
+ *   eligible, and the approval + budget gates decide its fate at invoke time.
+ *   This is a strict relaxation of the former FREE_ONLY default — everything
+ *   FREE_ONLY did, PREFERRED_FREE also does, plus it permits paid.
  * - UNKNOWN_COST is blocked by default (treated as premium, never free).
  * - No silent free -> paid fallback.
  */
@@ -19,7 +23,7 @@ export type CostPolicy = (typeof COST_POLICIES)[number];
 export const PRICING = ["free", "premium", "unknown"] as const;
 export type Pricing = (typeof PRICING)[number];
 
-export const DEFAULT_COST_POLICY: CostPolicy = "FREE_ONLY";
+export const DEFAULT_COST_POLICY: CostPolicy = "PREFERRED_FREE";
 export const UNKNOWN_PRICING_BEHAVIOR: "premium" = "premium";
 
 /** Router decisions are deterministic and fully explainable. */

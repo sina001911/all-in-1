@@ -97,6 +97,12 @@ export interface GatewayTurnRequest {
   readonly tools: readonly ToolSchema[];
   /** Opt into a streaming turn; the default buffered result contract is kept. */
   readonly streaming?: boolean;
+  /**
+   * Explicit model preference for THIS turn. When present and valid it is
+   * honoured first by the engine selector, ahead of the priority chain and
+   * the fallback. Absent means no preference the selector chooses.
+   */
+  readonly preference?: { readonly provider: string; readonly modelId: string };
 }
 
 export interface GatewayTurnResult {
@@ -116,9 +122,11 @@ export interface GatewayTurnResult {
 /**
  * What one settled model turn actually consumed (D27). Every number comes off
  * the execution outcome the engine already settled: `committedUsd` is the same
- * figure the budget ledger committed, and the token counts are present only
- * when the provider emitted a usage frame during a streamed turn — never
- * estimated, never defaulted, never invented.
+ * figure the budget ledger committed, and the token counts are the ones the
+ * provider's own usage frame reported (D30: they ride on the settled result, so
+ * a buffered turn is accounted as faithfully as a streamed one) — never
+ * estimated, never defaulted, never invented. Absent means the provider
+ * reported no usage, not zero.
  */
 export interface TurnSettlement {
   /** The catalogue model id, `provider/model`. */
@@ -165,6 +173,7 @@ export interface AgentRequest {
    * these; they are derived from the same ProviderInvokeResult contract.
    */
   readonly onStreamEvent?: (event: StreamEvent) => void;
+  readonly preference?: { readonly provider: string; readonly modelId: string };
 }
 
 export interface AgentResult {
@@ -182,6 +191,14 @@ export interface AgentResult {
   /** True when the loop stopped for a human decision (not a failure). */
   readonly pausedForHuman: boolean;
   readonly escalated: boolean;
+  /**
+   * The catalogue model id this run actually used, `provider/model`. Absent
+   * when the run never reached the engine (a mode violation, a refused gate,
+   * a cancelled run) — the same condition that leaves `accounting` absent, so
+   * the two always agree. Carried at the top level so the UI can label a run
+   * with the model the human selected without digging into the ledger.
+   */
+  readonly model?: string;
   readonly error?: { readonly code: string; readonly message: string; readonly retryable: boolean };
   /**
    * One entry per model turn THIS call settled (D27), each carrying its

@@ -244,6 +244,11 @@ export class OpenAICompatibleAdapter extends BaseProviderAdapter {
     }
 
     const costUsd = estimateCostFromUsage(parsed, this.pricing, modelName);
+    // D30: the counts the cost was computed from are reported here, not just
+    // the cost. Previously a buffered paid call could settle $0.03 while the
+    // token counts that produced it were discarded at this exact line, so a
+    // usage record showed a cost and "—" for tokens.
+    const usage = parsed.usage;
 
     return {
       providerId: this.id,
@@ -254,6 +259,8 @@ export class OpenAICompatibleAdapter extends BaseProviderAdapter {
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       structured: request.structuredOutputSchema ? safeParseJson(text) : undefined,
       costUsd,
+      promptTokens: usage?.prompt_tokens,
+      completionTokens: usage?.completion_tokens,
       latencyMs: Date.now() - started,
       finishReason: choice?.finish_reason,
       raw: undefined, // never surface the raw payload
@@ -444,6 +451,9 @@ export class OpenAICompatibleAdapter extends BaseProviderAdapter {
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       structured: request.structuredOutputSchema ? safeParseJson(text) : undefined,
       costUsd,
+      // D30: the counts ride with the cost — same source frame, one derivation.
+      promptTokens: usageChunk?.prompt_tokens,
+      completionTokens: usageChunk?.completion_tokens,
       latencyMs: Date.now() - started,
       finishReason,
       raw: undefined,

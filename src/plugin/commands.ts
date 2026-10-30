@@ -146,7 +146,7 @@ function policyCommand(deliver: Deliver): CommandDefinitionLike {
           "[all-in-1] frozen defaults (enforced by tests, not convention)",
           "mainCoder: Atria-Dawn-Preview / s1 — immutable, router cannot resolve it",
           "spendBudgetUsd: 0",
-          "default policy: FREE_ONLY — UNKNOWN_COST is blocked, no silent free->paid fallback",
+          "default policy: PREFERRED_FREE — free first, paid eligible with approval; UNKNOWN_COST is blocked, no silent free->paid fallback",
           "BUILD: human-in-the-loop by default; --auto is an explicit, bounded opt-in (maxIterations 5)",
           "media: disabled in MVP (interfaces and registries only)",
           "egress: deny-all by default; opening a host is three explicit human acts",

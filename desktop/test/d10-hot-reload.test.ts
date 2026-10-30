@@ -10,7 +10,7 @@
  *   the new one;
  * - a rebuild that cannot change the sanitized provider set swaps nothing
  *   (engine identity is preserved);
- * - the frozen posture (FREE_ONLY, budget 0, deny-all egress) is re-derived
+ * - the frozen posture (PREFERRED_FREE, budget 0, deny-all egress) is re-derived
  *   from the same settings object after every reload;
  * - no credential value appears in any surfaced output.
  */
@@ -201,7 +201,7 @@ describe("frozen posture survives every reload", () => {
       ],
     } as never);
     expect(stack.budget.snapshot().budgetUsd).toBe(0);
-    expect(f.selectionPosture().policy).toBe("FREE_ONLY");
+    expect(f.selectionPosture().policy).toBe("PREFERRED_FREE");
 
     const snapshot = JSON.stringify(f.listModelProviders());
     expect(snapshot).not.toContain("sk-");

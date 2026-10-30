@@ -17,7 +17,14 @@ export class FileUsageStore implements UsageStore {
 
   constructor(file: JsonFileStore<UsageFile>) {
     this.file = file;
-    this.entries = [...(file.read()?.entries ?? [])];
+    try {
+      this.entries = [...(file.read()?.entries ?? [])];
+    } catch (e) {
+      // A corrupt usage store is a cache, not a source of truth. Start fresh
+      // and surface the error so the operator knows the accounting reset.
+      console.error("usage store: starting fresh because the persisted file is unreadable", e);
+      this.entries = [];
+    }
   }
 
   record(entry: UsageRecord): void {

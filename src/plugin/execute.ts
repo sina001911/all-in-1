@@ -14,9 +14,9 @@
  *     asserted through the P6 edit boundary before such a plan is produced.
  *
  * The stack used is the default inert one: deterministic local adapter and
- * models only, deny-all egress, zero budget, FREE_ONLY policy, no credential.
- * A command therefore cannot open a remote path even if the caller asks; that
- * remains three explicit human acts outside the plugin.
+ * models only, deny-all egress, zero budget, PREFERRED_FREE policy, no
+ * credential. A command therefore cannot open a remote path even if the caller
+ * asks; that remains three explicit human acts outside the plugin.
  */
 import type { ModelRole } from "../registry/roles.ts";
 import type { SafetyMode } from "../safety/guard.ts";

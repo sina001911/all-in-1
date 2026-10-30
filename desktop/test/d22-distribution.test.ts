@@ -25,7 +25,7 @@ describe("desktop package foundation", () => {
 
   it("source still has the first-run hint and the bottoms stay open", () => {
     const html = readFileSync(join(ROOT, "desktop", "src", "renderer", "index.html"), "utf8");
-    expect(html).toContain("First run?");
+    expect(html).toContain("First run");
     expect(html).toContain("Settings");
   });
 });

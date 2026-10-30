@@ -26,6 +26,14 @@ export interface ProviderInvokeResult {
   readonly toolCalls?: readonly ProviderToolCall[];
   /** Actual cost in USD, from the provider's own usage metadata when available. */
   readonly costUsd: number;
+  /**
+   * The token counts `costUsd` was derived from (D30). They travel WITH the
+   * cost rather than being recomputed downstream, so a record can never show a
+   * cost without the tokens that produced it. Absent means the provider
+   * reported no usage — never 0-invented.
+   */
+  readonly promptTokens?: number;
+  readonly completionTokens?: number;
   readonly latencyMs: number;
   readonly finishReason?: string;
   /** Provider-specific raw payload, never logged verbatim. */

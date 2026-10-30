@@ -53,7 +53,7 @@ export const ROLE_DEFINITIONS: Readonly<Record<ModelRole, RoleDefinition>> = {
   CODING_ASSISTANT: {
     id: "CODING_ASSISTANT",
     description: "Drafts edits that Atria reviews, approves, and applies.",
-    defaultPolicy: "FREE_ONLY",
+    defaultPolicy: "PREFERRED_FREE",
     mayEditProject: false,
     mayDecide: false,
     autoInvocable: false,
@@ -80,7 +80,7 @@ export const ROLE_DEFINITIONS: Readonly<Record<ModelRole, RoleDefinition>> = {
   VISION: {
     id: "VISION",
     description: "Screenshot -> structured UI/UX analysis. Untrusted perception layer.",
-    defaultPolicy: "FREE_ONLY",
+    defaultPolicy: "PREFERRED_FREE",
     mayEditProject: false,
     mayDecide: false,
     autoInvocable: true,
@@ -89,7 +89,7 @@ export const ROLE_DEFINITIONS: Readonly<Record<ModelRole, RoleDefinition>> = {
   VISUAL_QA: {
     id: "VISUAL_QA",
     description: "Target-vs-current comparison and defect detection.",
-    defaultPolicy: "FREE_ONLY",
+    defaultPolicy: "PREFERRED_FREE",
     mayEditProject: false,
     mayDecide: false,
     autoInvocable: true,
@@ -98,7 +98,7 @@ export const ROLE_DEFINITIONS: Readonly<Record<ModelRole, RoleDefinition>> = {
   FAST_TASK: {
     id: "FAST_TASK",
     description: "Summaries, labels, triage, small structured JSON.",
-    defaultPolicy: "FREE_ONLY",
+    defaultPolicy: "PREFERRED_FREE",
     mayEditProject: false,
     mayDecide: false,
     autoInvocable: true,
@@ -107,7 +107,7 @@ export const ROLE_DEFINITIONS: Readonly<Record<ModelRole, RoleDefinition>> = {
   IMAGE_GENERATOR: {
     id: "IMAGE_GENERATOR",
     description: "text->image / image->image. Scaffold only; disabled in MVP.",
-    defaultPolicy: "FREE_ONLY",
+    defaultPolicy: "PREFERRED_FREE",
     mayEditProject: false,
     mayDecide: false,
     autoInvocable: false,
@@ -116,7 +116,7 @@ export const ROLE_DEFINITIONS: Readonly<Record<ModelRole, RoleDefinition>> = {
   IMAGE_EDITOR: {
     id: "IMAGE_EDITOR",
     description: "image edit / inpaint / upscale. Scaffold only; disabled in MVP.",
-    defaultPolicy: "FREE_ONLY",
+    defaultPolicy: "PREFERRED_FREE",
     mayEditProject: false,
     mayDecide: false,
     autoInvocable: false,
@@ -125,7 +125,7 @@ export const ROLE_DEFINITIONS: Readonly<Record<ModelRole, RoleDefinition>> = {
   VIDEO_GENERATOR: {
     id: "VIDEO_GENERATOR",
     description: "text->video / image->video. Scaffold only; disabled in MVP.",
-    defaultPolicy: "FREE_ONLY",
+    defaultPolicy: "PREFERRED_FREE",
     mayEditProject: false,
     mayDecide: false,
     autoInvocable: false,
@@ -134,7 +134,7 @@ export const ROLE_DEFINITIONS: Readonly<Record<ModelRole, RoleDefinition>> = {
   VIDEO_EDITOR: {
     id: "VIDEO_EDITOR",
     description: "video editing. Scaffold only; disabled in MVP.",
-    defaultPolicy: "FREE_ONLY",
+    defaultPolicy: "PREFERRED_FREE",
     mayEditProject: false,
     mayDecide: false,
     autoInvocable: false,
@@ -143,7 +143,7 @@ export const ROLE_DEFINITIONS: Readonly<Record<ModelRole, RoleDefinition>> = {
   VIDEO_UNDERSTANDING: {
     id: "VIDEO_UNDERSTANDING",
     description: "video -> structured analysis. Scaffold only; disabled in MVP.",
-    defaultPolicy: "FREE_ONLY",
+    defaultPolicy: "PREFERRED_FREE",
     mayEditProject: false,
     mayDecide: false,
     autoInvocable: false,
@@ -152,7 +152,7 @@ export const ROLE_DEFINITIONS: Readonly<Record<ModelRole, RoleDefinition>> = {
   MEDIA_QA: {
     id: "MEDIA_QA",
     description: "Media asset validation. Scaffold only; disabled in MVP.",
-    defaultPolicy: "FREE_ONLY",
+    defaultPolicy: "PREFERRED_FREE",
     mayEditProject: false,
     mayDecide: false,
     autoInvocable: false,
@@ -161,7 +161,7 @@ export const ROLE_DEFINITIONS: Readonly<Record<ModelRole, RoleDefinition>> = {
   MODEL_ROUTER: {
     id: "MODEL_ROUTER",
     description: "Deterministic role->model resolution. Not an LLM in the MVP.",
-    defaultPolicy: "FREE_ONLY",
+    defaultPolicy: "PREFERRED_FREE",
     mayEditProject: false,
     mayDecide: false,
     autoInvocable: true,

@@ -313,7 +313,7 @@ async function main(): Promise<void> {
   if (cmd === "policy") {    console.log(
       JSON.stringify(
         {
-          defaultPolicy: "FREE_ONLY",
+          defaultPolicy: "PREFERRED_FREE",
           spendBudgetUsd: 0,
           unknownPricing: "blocked unless explicitly approved",
           silentPaidFallback: "forbidden",
@@ -344,7 +344,7 @@ async function main(): Promise<void> {
           capabilities: stack.capabilities,
           chains: stack.chains,
           approvals: stack.approvals,
-          policy: "FREE_ONLY",
+          policy: "PREFERRED_FREE",
         },
       );
       console.log(JSON.stringify(decision, null, 2));
@@ -370,7 +370,7 @@ async function main(): Promise<void> {
     }
     const flags = parseFlags(args.slice(1));
     const text = flags.get("text");
-    const policy = (flags.get("policy") as "FREE_ONLY" | "PREMIUM_ALLOWED") ?? "FREE_ONLY";
+    const policy = (flags.get("policy") as "FREE_ONLY" | "PREFERRED_FREE" | "BALANCED" | "PREMIUM_ALLOWED" | "MANUAL") ?? "PREFERRED_FREE";
     const budget = Number(flags.get("budget") ?? 0);
     // Hosts are allowlisted BEFORE the engine is built, so the egress policy
     // the engine holds is the policy it enforces.
@@ -430,7 +430,7 @@ async function main(): Promise<void> {
     const flags = parseFlags(args.slice(1));
     const text = flags.get("text") ?? "";
     const image = flags.get("image");
-    const policy = (flags.get("policy") as "FREE_ONLY" | "PREMIUM_ALLOWED") ?? "FREE_ONLY";
+    const policy = (flags.get("policy") as "FREE_ONLY" | "PREFERRED_FREE" | "BALANCED" | "PREMIUM_ALLOWED" | "MANUAL") ?? "PREFERRED_FREE";
     const budget = Number(flags.get("budget") ?? 0);
     const { runner } = buildSpecialistStack({
       policy,
@@ -477,7 +477,7 @@ async function main(): Promise<void> {
       return;
     }
     const text = flags.get("text") ?? "";
-    const policy = (flags.get("policy") as "FREE_ONLY" | "PREMIUM_ALLOWED") ?? "FREE_ONLY";
+    const policy = (flags.get("policy") as "FREE_ONLY" | "PREFERRED_FREE" | "BALANCED" | "PREMIUM_ALLOWED" | "MANUAL") ?? "PREFERRED_FREE";
     const budget = Number(flags.get("budget") ?? 0);
     const { runner } = buildSpecialistStack({
       policy,
@@ -525,7 +525,7 @@ async function main(): Promise<void> {
     }
     const flags = parseFlags(args.slice(1));
     const text = flags.get("text") ?? "";
-    const policy = (flags.get("policy") as "FREE_ONLY" | "PREMIUM_ALLOWED") ?? "FREE_ONLY";
+    const policy = (flags.get("policy") as "FREE_ONLY" | "PREFERRED_FREE" | "BALANCED" | "PREMIUM_ALLOWED" | "MANUAL") ?? "PREFERRED_FREE";
     const budget = Number(flags.get("budget") ?? 0);
     const timeoutMs = flags.get("timeout") ? Number(flags.get("timeout")) : undefined;
     const providerResult = providersFromFlags(flags);

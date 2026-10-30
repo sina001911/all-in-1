@@ -17,11 +17,13 @@
  * that will be refused. Reading the key first would hand a credential to a
  * caller that has no right to receive it.
  *
- * Under the frozen defaults (`FREE_ONLY`, `spendBudgetUsd = 0`, deny-all
+ * Under the frozen defaults (`PREFERRED_FREE`, `spendBudgetUsd = 0`, deny-all
  * egress, no remote provider registered) this engine can only ever reach the
- * deterministic local adapter. The machinery is complete, but it is inert
- * unless a user explicitly allowlists a host, registers a provider, and grants
- * any required approval.
+ * deterministic local adapter. The cost policy no longer pre-blocks paid
+ * models, but the zero budget still refuses any spend, so a paid model is
+ * eligible yet never executable until a user sets a budget and registers a
+ * provider. The machinery is complete, but it is inert unless a user explicitly
+ * allowlists a host, registers a provider, and grants any required approval.
  */
 import type { ModelCatalog } from "../models/catalog.ts";
 import type { StreamEvent } from "./types.ts";

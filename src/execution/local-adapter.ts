@@ -3,10 +3,10 @@
  *
  * It is registered by default because it is the only adapter whose zero cost
  * is verifiable by construction: it makes no network call, reads no
- * credential, and touches no file. Under the frozen defaults (`FREE_ONLY`,
- * `spendBudgetUsd = 0`) it is the effective provider for every capability that
- * has no verified remote model, so the execution layer is always exercisable
- * without credentials.
+ * credential, and touches no file. Under the frozen defaults
+ * (`PREFERRED_FREE`, `spendBudgetUsd = 0`) it is the effective provider for every
+ * capability that has no verified remote model, so the execution layer is always
+ * exercisable without credentials.
  *
  * Output is deterministic and content-derived from the request hash: identical
  * inputs always produce identical outputs. Nothing is invented about a real

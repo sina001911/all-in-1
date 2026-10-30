@@ -122,6 +122,7 @@ describe("settings store", () => {
       theme: "dark",
       defaultMode: "INSPECT",
       providers: [],
+      budgetUsd: 0,
     });
   });
 

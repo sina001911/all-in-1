@@ -56,6 +56,17 @@ export interface ReadArtifact extends StoredArtifact {
   readonly bytes: Uint8Array;
 }
 
+/** A lightweight listing entry: enough for the UI to render a thumbnail row. */
+export interface ArtifactEntry {
+  readonly artifactId: string;
+  readonly kind: ArtifactKind;
+  readonly contentType: string;
+  readonly bytes: number;
+  readonly createdAt: number;
+  readonly runId: string;
+  readonly sourceUrl?: string;
+}
+
 /** Content-addressed ids are always `kind/<sha256>.<ext>` — nothing else. */
 const ARTIFACT_ID_RE = /^[a-z]+\/[0-9a-f]{64}(?:\.[a-z0-9]+)?$/;
 
@@ -173,6 +184,50 @@ export class ArtifactStore {
     }
   }
 
+  /** List every stored artifact, newest first. Never throws on a missing dir. */
+  list(): ReadonlyArray<ArtifactEntry> {
+    const entries: ArtifactEntry[] = [];
+    for (const kind of ARTIFACT_KINDS) {
+      const dir = join(this.opts.baseDir, kind);
+      if (!existsSync(dir)) continue;
+      for (const name of readdirSync(dir)) {
+        if (!ARTIFACT_ID_RE.test(`${kind}/${name}`)) continue;
+        const id = `${kind}/${name}`;
+        let createdAt = 0;
+        try {
+          createdAt = statSync(join(dir, name)).mtimeMs;
+        } catch {
+          continue;
+        }
+        let meta: ArtifactMetadata | undefined;
+        try {
+          meta = this.readMetadata(id);
+        } catch {
+          /* orphaned artifact with no sidecar: surface what we know */
+        }
+        entries.push({
+          artifactId: id,
+          kind,
+          contentType: meta?.contentType ?? "application/octet-stream",
+          bytes: meta?.bytes ?? 0,
+          createdAt: meta?.createdAt ?? createdAt,
+          runId: meta?.runId ?? "",
+          sourceUrl: meta?.sourceUrl,
+        });
+      }
+    }
+    entries.sort((a, b) => b.createdAt - a.createdAt);
+    return entries;
+  }
+
+  /** Expose the retention knobs so the desktop stack can detect drift. */
+  get retentionDays(): number {
+    return this.opts.retentionDays;
+  }
+  get keepRuns(): number {
+    return this.opts.keepRuns;
+  }
+
   /**
    * Best-effort retention sweep. Prunes artifacts older than `retentionDays`,
    * keeping at least `keepRuns` most recent per kind. Pruning errors are
@@ -188,7 +243,11 @@ export class ArtifactStore {
 
       const entries: { id: string; createdAt: number; path: string }[] = [];
       for (const name of readdirSync(dir)) {
-        if (!name.endsWith(".png") && !name.endsWith(".jpg") && !name.endsWith(".jpeg")) continue;
+        // Skip metadata sidecars (`<sha>.json`); every other file in the
+        // artifact dir is a stored artifact. Filtering by image extensions
+        // alone let .webp/.pdf/.bin artifacts — which `extensionFor` writes —
+        // accumulate past the retention window forever.
+        if (name.endsWith(".json")) continue;
         const path = join(dir, name);
         const id = `${kind}/${name}`;
         let createdAt = 0;

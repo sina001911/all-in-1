@@ -29,7 +29,7 @@ export interface SpecialistStack {
 }
 
 export function buildSpecialistStack(opts: {
-  policy?: "FREE_ONLY" | "PREMIUM_ALLOWED";
+  policy?: "FREE_ONLY" | "PREFERRED_FREE" | "BALANCED" | "PREMIUM_ALLOWED" | "MANUAL";
   budgetUsd?: number;
   /** Defaults to an in-memory sink; the CLI passes an stderr writer. */
   logSink?: LogSink;

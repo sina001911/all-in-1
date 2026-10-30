@@ -223,6 +223,7 @@ export class AgentRuntime {
         history: [...run.history],
         tools: run.visible,
         streaming: req.streaming === true,
+        preference: req.preference,
       };
       let turn;
       try {
@@ -419,6 +420,10 @@ export class AgentRuntime {
       outcomes: [...run.outcomes],
       pausedForHuman,
       escalated: run.state.escalated,
+      // D29: surface the model the run actually used. The last settled turn's
+      // modelId is the one the human sees in the catalogue, so it is carried
+      // at the top level alongside the ledger rather than only inside it.
+      model: settled && settled.length > 0 ? settled[settled.length - 1].modelId : undefined,
       error,
       accounting: settled && settled.length > 0 ? [...settled] : undefined,
     };

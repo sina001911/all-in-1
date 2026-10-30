@@ -226,7 +226,7 @@ describe("facade end-to-end streaming", () => {
     expect(renderer).toContain("setInterval(pollStream, 300)");
     expect(renderer).toContain("stopStreamPoll()");
     const html = readFileSync(join(SRC, "renderer", "index.html"), "utf8");
-    expect(html).toContain('id="agent-stream"');
+    expect(html).toContain('id="transcript"');
   });
 
   it("concurrent runs: separate envelopes, separate cursor advancement", () => {

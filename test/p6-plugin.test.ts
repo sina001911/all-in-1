@@ -281,7 +281,7 @@ describe("the command surface", () => {
     if (!def) return;
     await invoke(def, "");
     expect(c.inputs[0]?.text).toContain("spendBudgetUsd: 0");
-    expect(c.inputs[0]?.text).toContain("FREE_ONLY");
+    expect(c.inputs[0]?.text).toContain("PREFERRED_FREE");
     expect(c.inputs[0]?.text).toContain("The only file writers are the OpenCode tools");
     expect(c.inputs[0]?.text).toContain("runtime dependencies: zero");
   });

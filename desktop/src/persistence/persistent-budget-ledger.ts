@@ -20,12 +20,18 @@ export interface PersistedBudget {
   readonly budgetUsd: number;
   readonly reservedUsd: number;
   readonly spentUsd: number;
+  /**
+   * D35: media generations settled so far. Distinct from `spentUsd` because a
+   * free generation still consumes a slot under `maxMediaGenerations`.
+   */
+  readonly spentGenerations?: number;
 }
 
 export class PersistentBudgetLedger extends BudgetLedger {
   private readonly file: JsonFileStore<PersistedBudget> | undefined;
   private shadowReserved = 0;
   private shadowSpent = 0;
+  private shadowGenerations = 0;
 
   constructor(
     budgetUsd: number,
@@ -34,9 +40,23 @@ export class PersistentBudgetLedger extends BudgetLedger {
   ) {
     super(budgetUsd);
     this.file = file;
-    const restored = initial ?? file?.read();
+    let restored: PersistedBudget | undefined;
+    try {
+      // `initial` is partial (a patch), so merge it onto the stored record
+      // rather than assigning it directly: the shadow fields are all
+      // required, and a partial must not silently leave one undefined.
+      const stored = file?.read();
+      restored = stored ? { ...stored, ...initial } : initial as PersistedBudget | undefined;
+    } catch (e) {
+      // The budget ledger is the most consequential of the persistent stores:
+      // a silent reset here would lose the spend tracking with no warning.
+      // Surface the error and start from zero — the operator will see it in
+      // the log and can recover the state from the usage store if needed.
+      console.error("budget ledger: starting from zero because the persisted file is unreadable", e);
+    }
     this.shadowReserved = Math.max(0, restored?.reservedUsd ?? 0);
     this.shadowSpent = Math.max(0, restored?.spentUsd ?? 0);
+    this.shadowGenerations = Math.max(0, restored?.spentGenerations ?? 0);
   }
 
   override reserve(amount: number): boolean {
@@ -65,6 +85,15 @@ export class PersistentBudgetLedger extends BudgetLedger {
     return Math.max(0, this.budgetUsd - this.shadowReserved - this.shadowSpent);
   }
 
+  override incrementGeneration(): void {
+    this.shadowGenerations += 1;
+    this.persist();
+  }
+
+  override get spentGenerationsCount(): number {
+    return this.shadowGenerations;
+  }
+
   override snapshot(): BudgetSnapshot {
     return {
       budgetUsd: this.budgetUsd,
@@ -78,6 +107,7 @@ export class PersistentBudgetLedger extends BudgetLedger {
       budgetUsd: this.budgetUsd,
       reservedUsd: this.shadowReserved,
       spentUsd: this.shadowSpent,
+      spentGenerations: this.shadowGenerations,
     });
   }
 }

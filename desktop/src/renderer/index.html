@@ -2,410 +2,165 @@
 <html lang="en" data-theme="system">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'" />
-  <title>all_in_1 — Desktop</title>
-  <style>
-    /* ===================================================================
-       DESIGN TOKENS (M1)
-       One semantic vocabulary, two palettes. Nothing below the token layer
-       hard-codes a colour, so a theme is a value swap and never a second
-       stylesheet. Dark is a neutral blue-black ground rather than pure black,
-       so panels read as recessed surfaces instead of holes.
-       =================================================================== */
-    :root {
-      --surface-0: #f7f8fa;
-      --surface-1: #ffffff;
-      --surface-2: #f0f2f6;
-      --surface-hover: #eef1f6;
-      --fg-strong: #161c26;
-      --fg: #2b3340;
-      --fg-muted: #5b6474;
-      --fg-faint: #8b94a3;
-      --border: #dde2ea;
-      --border-strong: #c3cad6;
-      --accent: #2f6fd0;
-      --accent-fg: #ffffff;
-      --accent-soft: #e8f0fc;
-      --ok: #1f7a4d;
-      --ok-soft: #e6f4ec;
-      --warn: #9a6a12;
-      --warn-soft: #fdf3e0;
-      --danger: #b3261e;
-      --danger-soft: #fbeceb;
-      --danger-fg: #ffffff;
-      --info: #2f6fd0;
-      --info-soft: #e8f0fc;
-      --shadow-1: 0 1px 2px rgba(16, 24, 40, .05);
-      --shadow-2: 0 4px 12px rgba(16, 24, 40, .08);
-      --r-sm: 4px;
-      --r-md: 6px;
-      --r-lg: 10px;
-      --s1: 4px;
-      --s2: 8px;
-      --s3: 12px;
-      --s4: 16px;
-      --s5: 20px;
-      --s6: 24px;
-      --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      --font-mono: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
-    }
-    [data-theme="dark"] {
-      --surface-0: #0f141b;
-      --surface-1: #151b24;
-      --surface-2: #1b222d;
-      --surface-hover: #1e2632;
-      --fg-strong: #e8edf5;
-      --fg: #c6ceda;
-      --fg-muted: #8e99a8;
-      --fg-faint: #66707e;
-      --border: #232b37;
-      --border-strong: #313b49;
-      --accent: #5b9cf0;
-      --accent-fg: #0f141b;
-      --accent-soft: #17253a;
-      --ok: #4db380;
-      --ok-soft: #14251d;
-      --warn: #d9a441;
-      --warn-soft: #2a2013;
-      --danger: #f0776b;
-      --danger-soft: #2d1a19;
-      --danger-fg: #0f141b;
-      --info: #5b9cf0;
-      --info-soft: #17253a;
-      --shadow-1: 0 1px 2px rgba(0, 0, 0, .30);
-      --shadow-2: 0 4px 14px rgba(0, 0, 0, .40);
-    }
+  <!--
+    Content Security Policy (D31).
 
-    /* ===================================================================
-       BASE
-       =================================================================== */
-    * { box-sizing: border-box; }
-    html, body { height: 100%; }
-    body {
-      margin: 0;
-      font-family: var(--font-sans);
-      font-size: 13px;
-      line-height: 1.5;
-      color: var(--fg);
-      background: var(--surface-0);
-      -webkit-font-smoothing: antialiased;
-    }
-    h1, h2, h3 { margin: 0; color: var(--fg-strong); font-weight: 600; }
-    h1 { font-size: 15px; }
-    h2 { font-size: 14px; }
-    h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-muted); }
-    a { color: var(--accent); }
+    The renderer is the untrusted surface: it renders model output and tool
+    results. The original policy set only `default-src 'self'` and a style
+    source, which left the exfiltration and plugin sinks at their defaults.
+    This one names every sink the page actually uses and closes the rest.
 
-    /* Focus: one visible ring everywhere, keyboard-only so mouse users do not
-       see it on click. */
-    :focus { outline: none; }
-    :focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-      border-radius: var(--r-sm);
-    }
-
-    .visually-hidden {
-      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-      overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
-    }
-    .muted { color: var(--fg-muted); }
-    .faint { color: var(--fg-faint); }
-    .mono { font-family: var(--font-mono); font-size: 11.5px; }
-    .row { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
-    .grow { flex: 1 1 auto; min-width: 0; }
-    .stack { display: grid; gap: var(--s3); }
-    .empty { color: var(--fg-faint); font-size: 12px; padding: var(--s2) 0; }
-
-    /* ===================================================================
-       SHELL (M2)
-       =================================================================== */
-    .shell { display: flex; flex-direction: column; height: 100vh; }
-    .topbar {
-      display: flex; align-items: center; gap: var(--s4);
-      padding: 0 var(--s4); height: 46px; flex: 0 0 46px;
-      background: var(--surface-1);
-      border-bottom: 1px solid var(--border);
-    }
-    .brand { font-weight: 600; color: var(--fg-strong); letter-spacing: -.01em; }
-    .brand small { color: var(--fg-faint); font-weight: 400; margin-left: var(--s2); }
-    .posture { font-size: 11.5px; color: var(--fg-muted); }
-    .app { display: grid; grid-template-columns: 208px 1fr; flex: 1 1 auto; min-height: 0; }
-    .sidebar {
-      display: flex; flex-direction: column; min-height: 0;
-      background: var(--surface-1);
-      border-right: 1px solid var(--border);
-      padding: var(--s3) var(--s2);
-      gap: var(--s1);
-    }
-    .nav { display: grid; gap: 2px; }
-    .nav-item {
-      display: flex; align-items: center; gap: var(--s2);
-      width: 100%; text-align: left; padding: var(--s2) var(--s3);
-      font: inherit; font-size: 12.5px; color: var(--fg);
-      background: transparent; border: 1px solid transparent;
-      border-radius: var(--r-md); cursor: pointer;
-    }
-    .nav-item:hover { background: var(--surface-hover); }
-    .nav-item[aria-current="page"] {
-      background: var(--accent-soft); color: var(--accent); font-weight: 600;
-      border-color: var(--border);
-    }
-    .nav-count {
-      margin-left: auto; font-size: 10.5px; color: var(--fg-muted);
-      background: var(--surface-2); border-radius: 999px; padding: 1px 6px;
-    }
-    .sidebar-foot {
-      margin-top: auto; padding: var(--s3);
-      font-size: 11px; color: var(--fg-muted);
-      border-top: 1px solid var(--border);
-    }
-    .main { min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-    .view { display: none; flex-direction: column; min-height: 0; flex: 1 1 auto; }
-    .view.active { display: flex; }
-    .view-head {
-      display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
-      padding: var(--s4) var(--s5) var(--s3);
-      border-bottom: 1px solid var(--border);
-    }
-    .view-head p { margin: 0; color: var(--fg-muted); font-size: 12px; }
-    .view-body { padding: var(--s5); overflow: auto; flex: 1 1 auto; min-height: 0; }
-
-    /* ===================================================================
-       COMPONENTS
-       =================================================================== */
-    .btn {
-      font: inherit; font-size: 12.5px; font-weight: 500;
-      padding: 5px 12px; border-radius: var(--r-md);
-      border: 1px solid var(--border-strong); background: var(--surface-1);
-      color: var(--fg); cursor: pointer; white-space: nowrap;
-      transition: background .12s ease, border-color .12s ease;
-    }
-    .btn:hover:not(:disabled) { background: var(--surface-hover); }
-    .btn:disabled { opacity: .45; cursor: default; }
-    .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
-    .btn-primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
-    .btn-danger { background: var(--danger); border-color: var(--danger); color: var(--danger-fg); }
-    .btn-danger:hover:not(:disabled) { filter: brightness(1.08); background: var(--danger); }
-    .btn-ghost { background: transparent; border-color: transparent; color: var(--fg-muted); }
-    .btn-ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--fg); }
-    .btn-sm { padding: 3px 8px; font-size: 11.5px; }
-
-    .input, .select, .textarea {
-      font: inherit; font-size: 12.5px; color: var(--fg);
-      background: var(--surface-1); border: 1px solid var(--border-strong);
-      border-radius: var(--r-md); padding: 5px 8px;
-    }
-    .textarea { resize: vertical; width: 100%; font-family: inherit; }
-    .input::placeholder, .textarea::placeholder { color: var(--fg-faint); }
-    .field { display: grid; gap: var(--s1); }
-    .field > span { font-size: 11.5px; color: var(--fg-muted); }
-    .check { display: inline-flex; align-items: center; gap: var(--s2); font-size: 12.5px; }
-
-    .seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r-md); overflow: hidden; }
-    .seg button {
-      font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer;
-      background: var(--surface-1); color: var(--fg-muted);
-      border: 0; border-right: 1px solid var(--border);
-    }
-    .seg button:last-child { border-right: 0; }
-    .seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-
-    .card {
-      background: var(--surface-1); border: 1px solid var(--border);
-      border-radius: var(--r-lg); box-shadow: var(--shadow-1);
-    }
-    .card-pad { padding: var(--s4); }
-    .card + .card { margin-top: var(--s3); }
-
-    .badge {
-      display: inline-block; font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
-      padding: 1px 7px; border-radius: 999px; white-space: nowrap;
-      background: var(--surface-2); color: var(--fg-muted); border: 1px solid var(--border);
-    }
-    .badge-ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
-    .badge-warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
-    .badge-danger { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
-    .badge-info { background: var(--info-soft); color: var(--info); border-color: transparent; }
-
-    table.data { border-collapse: collapse; width: 100%; font-size: 12px; }
-    table.data th, table.data td {
-      text-align: left; padding: 7px var(--s3);
-      border-bottom: 1px solid var(--border); vertical-align: top;
-    }
-    table.data th {
-      color: var(--fg-muted); font-weight: 600; font-size: 11px;
-      text-transform: uppercase; letter-spacing: .05em;
-      background: var(--surface-2); position: sticky; top: 0;
-    }
-    table.data tbody tr:hover { background: var(--surface-hover); }
-    table.data tr.selectable { cursor: pointer; }
-    table.data tr.dim td { color: var(--fg-faint); }
-
-    /* Transcript */
-    .transcript { display: grid; gap: var(--s2); align-content: start; }
-    .turn {
-      border: 1px solid var(--border); border-left-width: 3px;
-      border-radius: var(--r-md); background: var(--surface-1); padding: var(--s2) var(--s3);
-    }
-    .turn-user { border-left-color: var(--info); }
-    .turn-assistant { border-left-color: var(--ok); }
-    .turn-tool { border-left-color: var(--warn); }
-    .turn-head { display: flex; align-items: center; gap: var(--s2); font-size: 11.5px; color: var(--fg-muted); }
-    .turn-body { margin-top: 2px; color: var(--fg); white-space: pre-wrap; word-break: break-word; }
-    .excerpt {
-      margin-top: var(--s2); padding: var(--s2); background: var(--surface-2);
-      border: 1px solid var(--border); border-radius: var(--r-sm);
-      font-family: var(--font-mono); font-size: 11.5px; color: var(--fg);
-      white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto;
-    }
-    details > summary { cursor: pointer; color: var(--fg-muted); font-size: 11.5px; list-style: none; }
-    details > summary::-webkit-details-marker { display: none; }
-    details > summary::before { content: "▸ "; }
-    details[open] > summary::before { content: "▾ "; }
-
-    /* Approvals */
-    .approval {
-      border: 1px solid var(--warn); border-left-width: 3px;
-      background: var(--warn-soft); border-radius: var(--r-md); padding: var(--s3);
-    }
-    .approval + .approval { margin-top: var(--s2); }
-    .approval-note { font-size: 11.5px; color: var(--warn); font-weight: 600; }
-
-    /* Feedback */
-    .skeleton {
-      height: 12px; border-radius: var(--r-sm); background: var(--surface-2);
-      animation: pulse 1.3s ease-in-out infinite;
-    }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
-    .error-panel {
-      border: 1px solid var(--danger); background: var(--danger-soft);
-      border-radius: var(--r-md); padding: var(--s3);
-    }
-    .error-panel code { font-family: var(--font-mono); font-size: 11.5px; color: var(--danger); font-weight: 600; }
-    .toasts { position: fixed; right: var(--s5); bottom: var(--s5); display: grid; gap: var(--s2); z-index: 40; }
-    .toast {
-      background: var(--surface-1); border: 1px solid var(--border-strong);
-      border-left: 3px solid var(--accent);
-      border-radius: var(--r-md); box-shadow: var(--shadow-2);
-      padding: var(--s2) var(--s3); font-size: 12px; max-width: 380px;
-    }
-    .toast-ok { border-left-color: var(--ok); }
-    .toast-warn { border-left-color: var(--warn); }
-    .toast-danger { border-left-color: var(--danger); }
-
-    .modal-backdrop {
-      position: fixed; inset: 0; background: rgba(8, 12, 18, .45);
-      display: none; align-items: center; justify-content: center; z-index: 50; padding: var(--s5);
-    }
-    .modal-backdrop.open { display: flex; }
-    .modal {
-      background: var(--surface-1); border: 1px solid var(--border-strong);
-      border-radius: var(--r-lg); box-shadow: var(--shadow-2);
-      width: min(460px, 100%); padding: var(--s5);
-    }
-    .modal h2 { margin-bottom: var(--s2); }
-
-    .tabs { display: flex; gap: var(--s1); border-bottom: 1px solid var(--border); margin-bottom: var(--s3); }
-    .tabs button {
-      font: inherit; font-size: 12.5px; padding: var(--s2) var(--s3); cursor: pointer;
-      background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted);
-    }
-    .tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
-
-    .composer { display: grid; gap: var(--s2); }
-    .kv { display: grid; grid-template-columns: 160px 1fr; gap: var(--s2) var(--s3); font-size: 12px; }
-    .kv dt { color: var(--fg-muted); }
-    .kv dd { margin: 0; }
-    pre.code {
-      background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md);
-      padding: var(--s3); font-family: var(--font-mono); font-size: 11.5px;
-      overflow: auto; max-height: 320px; white-space: pre-wrap; word-break: break-word; margin: 0;
-    }
-
-    /* ===================================================================
-       RESPONSIVE + MOTION (M1)
-       =================================================================== */
-    @media (max-width: 900px) {
-      .app { grid-template-columns: 56px 1fr; }
-      .nav-label, .nav-count, .sidebar-foot, .brand small { display: none; }
-      .nav-item { justify-content: center; padding: var(--s2); }
-      .kv { grid-template-columns: 1fr; gap: var(--s1) 0; }
-    }
-    @media (max-width: 620px) {
-      .topbar { flex-wrap: wrap; height: auto; flex-basis: auto; padding: var(--s2) var(--s3); }
-      .view-body { padding: var(--s3); }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after {
-        animation-duration: .001ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: .001ms !important;
-        scroll-behavior: auto !important;
-      }
-    }
-  </style>
+    - `script-src 'self'` — one bundled same-origin script; no inline script and
+      no inline event handlers exist in this page.
+    - `style-src 'self' 'unsafe-inline'` — the design-token block is inline and
+      the markup carries inline `style` attributes. Script execution stays
+      blocked, so this does not widen the XSS surface.
+    - `connect-src 'none'` — the renderer reaches the core ONLY through the
+      contextBridge (`window.allInOne`), which is IPC and not governed by CSP.
+      It needs no network capability at all, so a successful injection has no
+      channel to send anything out.
+    - `img-src`/`font-src` `'self'` — the stylesheet uses system fonts and no
+      `url()`; no remote asset is referenced anywhere.
+    - `base-uri`/`form-action` `'none'` — there is no `<base>` and no form in
+      this page, so nothing legitimate is lost.
+    - `frame-ancestors` is deliberately ABSENT. A `<meta>`-delivered policy
+      cannot carry it — Chromium ignores the directive and logs a warning on
+      every startup — and it cannot be delivered as a header either, because
+      `loadFile()` serves a `file://` URL that `webRequest` never sees. Writing
+      it here would be configuration that reads like protection while
+      enforcing nothing. The equivalent control is structural instead:
+      `webviewTag: false`, no frame anywhere in the page, and the main process
+      denying both popups and off-app navigation.
+  -->
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; media-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'"
+  />
+  <title>AI1 — Desktop</title>
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div class="shell">
     <header class="topbar">
-      <div class="brand">all_in_1 <small>D6</small></div>
+      <div class="brand"><span id="brand-mark">AI1</span> <small>desktop</small></div>
       <div class="posture grow" id="posture" aria-live="polite">loading…</div>
       <div class="seg" role="group" aria-label="Colour theme">
         <button type="button" id="theme-light" aria-pressed="false">Light</button>
         <button type="button" id="theme-dark" aria-pressed="false">Dark</button>
         <button type="button" id="theme-system" aria-pressed="true">System</button>
       </div>
+      <select id="lang-select" class="select" aria-label="Language" style="font-size:11.5px;padding:3px 6px">
+        <option value="en">English</option>
+        <option value="fa">فارسی</option>
+      </select>
     </header>
 
     <div class="app">
       <aside class="sidebar">
         <nav class="nav" id="nav" aria-label="Primary">
-          <button type="button" class="nav-item" data-view="agent" aria-current="page"><span class="nav-label">Agent</span></button>
-          <button type="button" class="nav-item" data-view="runs"><span class="nav-label">Runs</span></button>
-          <button type="button" class="nav-item" data-view="tools"><span class="nav-label">Tools</span></button>
-          <button type="button" class="nav-item" data-view="approvals"><span class="nav-label">Approvals</span><span class="nav-count" id="nav-approvals" hidden>0</span></button>
-          <button type="button" class="nav-item" data-view="audit"><span class="nav-label">Audit</span></button>
-          <button type="button" class="nav-item" data-view="models"><span class="nav-label">Models</span></button>
-          <button type="button" class="nav-item" data-view="workspace"><span class="nav-label">Workspace</span></button>
-          <button type="button" class="nav-item" data-view="settings"><span class="nav-label">Settings</span></button>
+          <button type="button" class="nav-item" data-view="chat" aria-current="page" title="New Chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>
+          <details class="nav-group" open>
+            <summary class="nav-item" title="Workspaces"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6a2 2 0 0 0 2 2h2v4a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-4h2a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z"/></svg></summary>
+            <div class="nav-sub" id="nav-workspaces"></div>
+          </details>
+          <details class="nav-group">
+            <summary class="nav-item" title="Conversations"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v4H4zM4 10h16v10H4z"/></svg><span class="nav-count" id="nav-conversations" hidden>0</span></summary>
+            <div class="nav-sub" id="nav-conversations-list"></div>
+          </details>
+          <button type="button" class="nav-item" data-view="models" title="Models & Providers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="4" rx="1"/><rect x="2" y="10" width="20" height="4" rx="1"/><rect x="2" y="17" width="20" height="4" rx="1"/></svg></button>
+          <button type="button" class="nav-item" data-view="runs" title="Runs / Tasks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></button>
+          <button type="button" class="nav-item" data-view="tools" title="Tools"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></button>
+          <button type="button" class="nav-item" data-view="approvals" title="Approvals"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><span class="nav-count" id="nav-approvals" hidden>0</span></button>
+          <button type="button" class="nav-item" data-view="audit" title="Activity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></button>
+          <button type="button" class="nav-item" data-view="artifacts" title="Artifacts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></button>
+          <button type="button" class="nav-item" data-view="settings" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
         </nav>
         <div class="sidebar-foot" id="sidebar-foot"></div>
       </aside>
 
+      <aside class="chat-history" id="chat-history" aria-label="Chat history">
+        <div class="chat-history-header">
+          <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-muted);margin:0">Chat history</h3>
+        </div>
+        <div class="chat-history-search">
+          <input class="input" type="search" id="history-search" placeholder="Search conversations…" aria-label="Search chat history" style="width:100%" />
+        </div>
+        <div class="chat-history-list" id="chat-history-list"></div>
+        <div style="padding:var(--s3);border-top:1px solid var(--border)">
+          <button type="button" class="btn btn-primary" id="history-new" style="width:100%;justify-content:center">+ New Chat</button>
+        </div>
+      </aside>
+
       <main class="main">
-        <!-- AGENT ------------------------------------------------------- -->
-        <section class="view active" id="view-agent" aria-labelledby="h-agent">
+        <!-- CHAT ------------------------------------------------------- -->
+        <section class="view active" id="view-chat" aria-labelledby="h-chat">
           <div class="view-head">
-            <h2 id="h-agent">Agent</h2>
-            <p class="grow" id="mode-help">—</p>
-            <div class="seg" role="group" aria-label="Safety mode">
-              <button type="button" id="mode-INSPECT" aria-pressed="true">INSPECT</button>
-              <button type="button" id="mode-SUGGEST" aria-pressed="false">SUGGEST</button>
-              <button type="button" id="mode-BUILD" aria-pressed="false">BUILD</button>
+            <h2 id="h-chat">Chat</h2>
+            <div class="grow"></div>
+            <div class="seg" role="group" aria-label="Execution mode">
+              <button type="button" id="mode-INSPECT" aria-pressed="true">Single</button>
+              <button type="button" id="mode-COMPARE" aria-pressed="false">Compare</button>
+              <button type="button" id="mode-COLLAB" aria-pressed="false">Collaborate</button>
             </div>
-            <label class="check"><input type="checkbox" id="agent-auto" /> auto (bounded)</label>
-            <label class="check"><input type="checkbox" id="agent-stream" checked /> stream response live</label>
           </div>
-          <div class="view-body stack">
-            <div class="row">
-              <label class="field"><span>Run id — reuse to continue</span>
-                <input class="input" type="text" id="agent-run-id" placeholder="(blank starts a new run)" size="28" />
-              </label>
-              <div class="grow"></div>
-              <span id="agent-state" aria-live="polite"></span>
-              <button type="button" class="btn" id="agent-cancel" disabled>Cancel</button>
+          <div class="view-body" id="chat-body">
+            <div class="chat-scroll" id="chat-scroll">
+              <div class="chat-welcome" id="chat-welcome">
+                <div class="welcome-hero">
+                  <div class="welcome-sphere" aria-hidden="true"></div>
+                  <h1>Welcome to AI1</h1>
+                  <p class="muted">Choose a model and how you want to work. Built-in local models work offline; add a provider for more.</p>
+                </div>
+                <div class="welcome-cards" id="welcome-cards">
+                  <button type="button" class="welcome-card" data-action="generate"><div class="welcome-card-icon" aria-hidden="true">🎨</div><div class="welcome-card-label">Generate Image</div></button>
+                  <button type="button" class="welcome-card" data-action="video"><div class="welcome-card-icon" aria-hidden="true">🎬</div><div class="welcome-card-label">Video Generate</div></button>
+                  <button type="button" class="welcome-card" data-action="prompt"><div class="welcome-card-icon" aria-hidden="true">✨</div><div class="welcome-card-label">Improve Prompt</div></button>
+                  <button type="button" class="welcome-card" data-action="dashboard"><div class="welcome-card-icon" aria-hidden="true">📊</div><div class="welcome-card-label">Dashboard Design</div></button>
+                </div>
+                <div class="welcome-suggestions" id="welcome-suggestions"></div>
+              </div>
+              <div class="transcript" id="transcript" role="log" aria-live="polite" aria-label="Conversation transcript"></div>
             </div>
-            <div class="composer">
-              <label class="visually-hidden" for="agent-prompt">Prompt</label>
-              <textarea class="textarea" id="agent-prompt" rows="3" placeholder="Ask the agent…  (Enter to send, Shift+Enter for a new line)"></textarea>
-              <div class="row">
-                <button type="button" class="btn btn-primary" id="agent-run">Send</button>
-                <span class="faint" id="agent-hint"></span>
+            <div class="composer-wrap">
+              <div class="composer">
+                <label class="visually-hidden" for="agent-prompt">Message</label>
+                <textarea class="textarea" id="agent-prompt" rows="2" placeholder="Send a message…  (Enter to send, Shift+Enter for a new line)"></textarea>
+                <div class="model-picker">
+                  <div class="model-combobox" id="model-combobox" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-controls="model-list" aria-activedescendant="">
+                    <input type="text" class="input model-combobox-input" id="model-input" placeholder="Select a model…" readonly aria-label="Selected model" />
+                    <span class="model-combobox-arrow" aria-hidden="true">▼</span>
+                    <ul class="model-dropdown" id="model-list" role="listbox" aria-label="Model list" hidden></ul>
+                  </div>
+                  <input class="input picker-search" type="search" id="model-search" placeholder="Search model or provider…" aria-label="Search models" style="display:none" />
+                  <div class="seg" role="group" aria-label="Cost filter" id="model-cost-filter" style="display:none">
+                    <button type="button" aria-pressed="true" data-cost="all">All</button>
+                    <button type="button" aria-pressed="false" data-cost="FREE">Free</button>
+                    <button type="button" aria-pressed="false" data-cost="PAID">Paid</button>
+                  </div>
+                  <button type="button" class="btn btn-refresh" id="model-refresh" title="Re-read the model list and provider status" style="display:none">↻ Refresh</button>
+                </div>
+                <div class="model-status" id="model-status" role="status" aria-live="polite"></div>
+                <input type="hidden" id="model-select" value="" />
+                <div class="composer-tools">
+                  <button type="button" class="btn" id="composer-upload" title="Upload an image or file for analysis" aria-label="Upload file">📎 Attach</button>
+                  <input type="file" id="composer-file-input" accept="image/*,.pdf,.txt,.md,.csv,.json" hidden />
+                  <button type="button" class="btn" id="composer-tools-toggle" title="Tools" aria-label="Tools">🔧</button>
+                  <span class="badge" id="composer-pro-badge">PRO</span>
+                </div>
+                <div class="composer-bar">
+                  <div class="grow"></div>
+                  <select id="exec-type" class="select" aria-label="Execution type" style="max-width:160px">
+                    <option value="single">Single model</option>
+                    <option value="compare">Compare models</option>
+                    <option value="collab">Collaborate</option>
+                  </select>
+                  <button type="button" class="btn" id="composer-generate" title="Generate an image" aria-label="Generate image">🎨 Generate</button>
+                  <button type="button" class="btn" id="composer-mic" title="Voice input" aria-label="Voice input">🎤</button>
+                  <button type="button" class="btn btn-primary" id="agent-run">Send</button>
+                  <button type="button" class="btn" id="agent-cancel" disabled>Stop</button>
+                </div>
               </div>
             </div>
-            <div class="transcript" id="transcript" role="log" aria-live="polite" aria-label="Conversation transcript"></div>
-            <p class="faint" style="margin-top:var(--s2)">First run? Built-in local models work offline. For a real provider, go to Settings → Model providers, add the endpoint, then use Test config.</p>
             <div id="agent-first-run" class="card card-pad" style="display:none; margin-top:var(--s3)">
               <h3>First run</h3>
               <p class="muted" style="margin:var(--s2) 0">Start locally with deterministic models, or add a provider and test it before saving.</p>
@@ -414,6 +169,92 @@
                 <button type="button" class="btn" id="first-run-provider">Add provider</button>
                 <button type="button" class="btn" id="first-run-dismiss">Dismiss</button>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- COMPARE ----------------------------------------------------- -->
+        <section class="view" id="view-compare" aria-labelledby="h-compare">
+          <div class="view-head">
+            <h2 id="h-compare">Multi-Model Comparison</h2>
+            <p class="grow">Send the same request to several models at once. Each column is independent — one failure does not break the others.</p>
+            <button type="button" class="btn btn-primary" id="compare-start">Start comparison</button>
+          </div>
+          <div class="view-body stack">
+            <div class="card card-pad">
+              <h3>Request</h3>
+              <div class="row" style="margin-top:var(--s3)">
+                <label class="field grow"><span>Prompt</span><textarea class="textarea" id="cmp-prompt" rows="3" placeholder="What do you want the models to answer?"></textarea></label>
+              </div>
+              <div class="row" style="margin-top:var(--s3)">
+                <label class="field"><span>Concurrency</span><input class="input" type="number" id="cmp-concurrency" value="3" min="1" max="8" style="width:80px" /></label>
+                <label class="field"><span>Timeout (ms)</span><input class="input" type="number" id="cmp-timeout" value="30000" min="1000" style="width:100px" /></label>
+                <div class="grow"></div>
+                <label class="check"><input type="checkbox" id="cmp-stream" checked /> stream live</label>
+              </div>
+              <div id="cmp-models" class="stack" style="margin-top:var(--s3)"></div>
+            </div>
+            <div id="cmp-results" class="compare-grid"></div>
+          </div>
+        </section>
+
+        <!-- COLLAB ------------------------------------------------------ -->
+        <section class="view" id="view-collab" aria-labelledby="h-collab" role="region" aria-label="Collaboration">
+          <div class="view-head">
+            <h2 id="h-collab" data-en="Multi-Model Collaboration" data-fa="همکاری چندمدلی">Multi-Model Collaboration</h2>
+            <p class="grow" data-en="Pick every participant, a strategy, and an optional synthesis model. Each participant is an independent, fully-gated specialist run." data-fa="هر شرکت‌کننده، استراتژی و مدل سنتز اختیاری را انتخاب کنید. هر شرکت‌کننده یک اجرای متخصص مستقل است.">Pick every participant, a strategy, and an optional synthesis model. Each participant is an independent, fully-gated specialist run.</p>
+            <button type="button" class="btn btn-primary" id="collab-start" data-en="Start collaboration" data-fa="شروع همکاری">Start collaboration</button>
+          </div>
+          <div class="view-body stack">
+            <div class="card card-pad">
+              <h3 data-en="Recent Collaborations" data-fa="همکاری‌های اخیر">Recent Collaborations</h3>
+              <div id="collab-recent" class="stack" style="margin-bottom:var(--s2)"></div>
+              <button type="button" class="btn btn-ghost btn-sm" id="collab-refresh-recent" data-en="Refresh" data-fa="تازه‌سازی" aria-label="Refresh recent collaborations">Refresh</button>
+            </div>
+            <div class="card card-pad">
+              <h3 data-en="Task" data-fa="وظیفه">Task</h3>
+              <label class="field grow"><span data-en="Goal" data-fa="هدف">Goal</span><textarea class="textarea" id="collab-task" rows="3" placeholder="Describe the goal every participant works on, e.g. review the authentication module for security issues." data-ph-en="Describe the goal every participant works on..." data-ph-fa="هدفی که هر شرکت‌کننده روی آن کار می‌کند را توصیف کنید..." aria-label="Collaboration goal"></textarea></label>
+
+              <h4 style="margin:var(--s3) 0 var(--s2)" data-en="Participants" data-fa="شرکت‌کنندگان">Participants</h4>
+              <div id="collab-participants" class="collab-participants" aria-label="Participant list"></div>
+              <button type="button" class="btn btn-ghost" id="collab-add-participant" data-en="+ Add participant" data-fa="+ افزودن شرکت‌کننده" aria-label="Add participant">+ Add participant</button>
+
+              <div class="row" style="margin-top:var(--s3)">
+                <label class="field"><span data-en="Strategy" data-fa="استراتژی">Strategy</span>
+                  <select class="select" id="collab-strategy" aria-label="Execution strategy">
+                    <option value="parallel" data-en="Parallel — run together" data-fa="موازی — اجرای همزمان">Parallel — run together</option>
+                    <option value="sequential" data-en="Sequential — handoff" data-fa="پیوسته — تحویل">Sequential — handoff</option>
+                    <option value="debate" data-en="Debate — reconcile" data-fa="بحث — مصالحه">Debate — reconcile</option>
+                  </select>
+                </label>
+                <label class="field"><span data-en="Mode" data-fa="حالت">Mode</span>
+                  <select class="select" id="collab-mode" aria-label="Safety mode">
+                    <option value="INSPECT" data-en="INSPECT — read-only" data-fa="بازبینی — فقط خواندن">INSPECT — read-only</option>
+                    <option value="SUGGEST" data-en="SUGGEST — plan only" data-fa="پیشنهاد — فقط طرح">SUGGEST — plan only</option>
+                    <option value="BUILD" data-en="BUILD — may edit" data-fa="ساخت — ممکن است ویرایش کند">BUILD — may edit</option>
+                  </select>
+                </label>
+                <label class="check"><input type="checkbox" id="collab-stream" checked /><span data-en=" stream live" data-fa=" پخش زنده"> stream live</span></label>
+              </div>
+
+              <h4 style="margin:var(--s3) 0 var(--s2)" data-en="Synthesis (optional)" data-fa="سنتز (اختیاری)">Synthesis (optional)</h4>
+              <div class="row">
+                <label class="field grow"><span data-en="Provider" data-fa="ارائه‌دهنده">Provider</span>
+                  <input class="input" type="text" id="collab-synth-provider" placeholder="local" data-ph-en="local" data-ph-fa="محلی" aria-label="Synthesis provider" />
+                </label>
+                <label class="field grow"><span data-en="Model" data-fa="مدل">Model</span>
+                  <input class="input" type="text" id="collab-synth-model" placeholder="agent" data-ph-en="agent" data-ph-fa="عامل" aria-label="Synthesis model" />
+                </label>
+              </div>
+            </div>
+
+            <div id="collab-participant-cards" class="collab-steps" style="display:none" aria-label="Participant results" role="list"></div>
+            <div id="collab-disagreements" class="card card-pad" style="display:none" aria-label="Disagreements" role="region"></div>
+            <div id="collab-result" class="card card-pad" style="display:none" aria-label="Collaboration result" role="region">
+              <h3 data-en="Synthesis" data-fa="سنتز">Synthesis</h3>
+              <pre class="code" id="collab-result-text"></pre>
+              <h4 style="margin:var(--s3) 0 var(--s2)" class="muted" data-en="Contributions" data-fa="مشارکت‌ها">Contributions</h4>
+              <div id="collab-contribs" class="stack"></div>
             </div>
           </div>
         </section>
@@ -505,6 +346,18 @@
           <div class="view-body stack"><div id="workspace-roots"></div></div>
         </section>
 
+        <!-- ARTIFACTS --------------------------------------------------- -->
+        <section class="view" id="view-artifacts" aria-labelledby="h-artifacts">
+          <div class="view-head">
+            <h2 id="h-artifacts">Artifacts</h2>
+            <p class="grow">Uploaded images, generated images, and model deliverables. The ids are content-addressed — a download never exposes the store path.</p>
+            <button type="button" class="btn" id="artifacts-refresh" title="Re-read the artifact list">↻ Refresh</button>
+          </div>
+          <div class="view-body stack">
+            <div id="artifacts-list" class="stack" style="margin:var(--s3) 0"></div>
+          </div>
+        </section>
+
         <!-- SETTINGS ---------------------------------------------------- -->
         <section class="view" id="view-settings" aria-labelledby="h-settings">
           <div class="view-head"><h2 id="h-settings">Settings</h2><p class="grow">Frozen defaults are read-only and cannot be changed here.</p></div>
@@ -538,6 +391,7 @@
               <div class="stack" style="margin-top:var(--s3)">
                 <div id="settings-usage"></div>
                 <div id="settings-budget"></div>
+                <div id="settings-media"></div>
               </div>
             </div>
             <div class="card card-pad">
@@ -569,6 +423,10 @@
     </div>
   </div>
 
+  <script src="components.js"></script>
+  <script src="state.js"></script>
+  <script src="theme.js"></script>
+  <script src="i18n.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

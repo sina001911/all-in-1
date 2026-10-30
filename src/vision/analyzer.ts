@@ -6,8 +6,8 @@
  *
  * 1. Input validation (decode check, MIME check, maxImageEdge enforcement).
  * 2. Cost enforcement — delegated to the EXISTING ModelRouter on the VISION
- *    role, so the frozen FREE_ONLY / spendBudgetUsd = 0 / UNKNOWN_COST rules
- *    apply unchanged. The analyzer never duplicates pricing logic.
+ *    role, so the frozen PREFERRED_FREE / spendBudgetUsd = 0 / UNKNOWN_COST
+ *    rules apply unchanged. The analyzer never duplicates pricing logic.
  * 3. Provider selection via the VisionProviderRegistry (capability detection).
  *
  * If the router cannot resolve a usable paid/real model under the frozen
@@ -23,7 +23,7 @@ import type {
   VisualAnalysisRequest,
   VisionProvider,
 } from "./types.ts";
-import { pngDimensions } from "./types.ts";
+import { imageDimensions } from "./types.ts";
 import type { VisionProviderRegistry } from "./registry.ts";
 
 export interface AnalyzerOptions {
@@ -108,6 +108,16 @@ export class VisualAnalyzer {
 }
 
 function validateRequest(request: VisualAnalysisRequest, opts: Required<AnalyzerOptions>): void {
+  // The analyzer is an image-analysis path: a non-image MIME is refused before
+  // any bytes reach a provider, so a text/plain upload cannot be "analyzed"
+  // through the stub fallback that skips capability detection.
+  if (!request.mimeType || !request.mimeType.startsWith("image/")) {
+    throw new AllInOneError(
+      `Visual analysis requires an image MIME type, got ${request.mimeType ?? "undefined"}`,
+      "UNSUPPORTED_IMAGE",
+      "config",
+    );
+  }
   if (!(request.imageBytes instanceof Uint8Array) || request.imageBytes.byteLength === 0) {
     throw new AllInOneError(
       "Visual analysis requires non-empty image bytes",
@@ -129,7 +139,7 @@ function validateRequest(request: VisualAnalysisRequest, opts: Required<Analyzer
       "config",
     );
   }
-  const dims = pngDimensions(request.imageBytes);
+  const dims = imageDimensions(request.imageBytes);
   if (dims) {
     const longest = Math.max(dims.width, dims.height);
     if (longest > opts.maxImageEdge) {

@@ -195,8 +195,10 @@ describe("cost vocabulary projection onto the frozen policy set", () => {
     }
   });
 
-  it("defaults to the frozen FREE_ONLY policy", () => {
-    expect(DEFAULT_CAPABILITY_COST_POLICY).toBe("FREE_ONLY");
+  it("defaults to the frozen PREFERRED_FREE policy", () => {
+    // D31: the capability-layer default relaxed to ASK_BEFORE_PAID, which
+    // projects onto the frozen PREFERRED_FREE router policy.
+    expect(DEFAULT_CAPABILITY_COST_POLICY).toBe("ASK_BEFORE_PAID");
     expect(toRouterPolicy(DEFAULT_CAPABILITY_COST_POLICY)).toBe(DEFAULT_COST_POLICY);
   });
 

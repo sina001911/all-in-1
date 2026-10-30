@@ -19,6 +19,7 @@ export const ERROR_CATEGORIES = [
   "artifact",
   "config",
   "unavailable",
+  "persistence",
 ] as const;
 export type ErrorCategory = (typeof ERROR_CATEGORIES)[number];
 
@@ -64,6 +65,9 @@ export const ERROR_CODES = [
   "SELECTION_FAILED",
   "APPROVAL_REQUIRED",
   "BUDGET_EXCEEDED",
+  // persistence (D1)
+  "PERSISTENCE_READ_FAILED",
+  "PERSISTENCE_CORRUPT",
   // specialists + workflow (P5)
   "SPECIALIST_NOT_FOUND",
   "SCHEMA_INVALID",

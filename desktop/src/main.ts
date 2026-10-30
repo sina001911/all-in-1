@@ -13,31 +13,37 @@
  *
  * The application does not import or require OpenCode anywhere.
  */
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage, session } from "electron";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildDesktopStack } from "./desktop-stack.ts";
 import { DesktopFacade } from "./facade.ts";
+import { JsonFileStore } from "./persistence/json-store.ts";
+import { resolveDataPaths } from "./persistence/paths.ts";
+import { MEDIA_CAPABILITIES, type MediaRequest } from "../../src/media/types.ts";
 import type { DesktopStack } from "./desktop-stack.ts";
 import { ElectronSafeStorageCredentialProvider } from "./credentials/electron-safe-storage.ts";
 import { applyPickedRoot } from "./workspace/pick.ts";
-import { SAFETY_MODES, type SafetyMode } from "../../src/safety/guard.ts";
-import { MODEL_ROLES, type ModelRole } from "../../src/registry/roles.ts";
+// D29: the diagnostic request mapping lives outside the Electron boundary so
+// the seam that forwards `runId`/`streaming` to the facade is exercised in CI.
+import { buildCollabRequest, buildDiagnosticRequest, buildManyRequest, isSafetyMode } from "./ipc-requests.ts";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const isSelfTest = process.argv.includes("--selftest");
 
-function isSafetyMode(v: unknown): v is SafetyMode {
-  return typeof v === "string" && (SAFETY_MODES as readonly string[]).includes(v);
-}
-
-function isModelRole(v: unknown): v is ModelRole {
-  return typeof v === "string" && (MODEL_ROLES as readonly string[]).includes(v);
-}
+/**
+ * D31: the one URL the app window is allowed to occupy. `loadFile()` does not
+ * emit `will-navigate`, so this is only ever compared against a navigation the
+ * page or a user click starts *after* the initial load.
+ */
+const RENDERER_URL = pathToFileURL(join(__dirname, "renderer", "index.html")).toString();
 
 function buildStack(): DesktopStack {
   const baseDir = app.getPath("userData");
+  // D1: sweep orphaned `.tmp` files left by a crashed writer before any store
+  // opens, so a torn temp never masquerades as a live store on the next boot.
+  JsonFileStore.recoverTmpFiles(resolveDataPaths(baseDir).root);
   return buildDesktopStack({
     baseDir,
     credentials: new ElectronSafeStorageCredentialProvider(
@@ -58,25 +64,33 @@ function registerHandlers(facade: DesktopFacade): void {
   ipcMain.handle("all-in-1:run:usage", (_e, runId: unknown) =>
     typeof runId === "string" ? facade.getRunUsage(runId) : facade.listRunUsage(),
   );
-  ipcMain.handle("all-in-1:run:diagnostic", (_e, raw: unknown) => {
-    if (!raw || typeof raw !== "object") throw new Error("Invalid diagnostic request");
-    const req = raw as Record<string, unknown>;
-    if (!isSafetyMode(req.mode)) throw new Error(`Invalid mode: ${String(req.mode)}`);
-    if (typeof req.subject !== "string") throw new Error("subject must be a string");
-    const steps = Array.isArray(req.steps) && req.steps.every(isModelRole)
-      ? (req.steps as ModelRole[])
-      : undefined;
-    return facade.runDiagnostic({
-      mode: req.mode,
-      subject: req.subject,
-      steps,
-      auto: req.auto === true,
-      plan: typeof req.plan === "boolean" ? req.plan : undefined,
-      timeoutMs: typeof req.timeoutMs === "number" ? req.timeoutMs : undefined,
-    });
-  });
+  ipcMain.handle("all-in-1:run:diagnostic", (_e, raw: unknown) =>
+    // D29: the mapping (not the registration) is the seam. `runId` and
+    // `streaming` reach the facade from here, or the D16 bridge and the D18
+    // progress UI stay unreachable.
+    facade.runDiagnostic(buildDiagnosticRequest(raw)),
+  );
   ipcMain.handle("all-in-1:run:cancel", (_e, runId: unknown) =>
     typeof runId === "string" ? facade.cancelRun(runId) : false,
+  );
+  // D35: run management — rename, delete, and search. The id is the run's own
+  // content-addressed key; a rename is cosmetic and a delete never touches the
+  // artifact store or the usage ledger.
+  ipcMain.handle("all-in-1:run:rename", (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("Invalid rename request");
+    const req = raw as Record<string, unknown>;
+    const runId = req.runId;
+    const name = req.name;
+    if (typeof runId !== "string" || typeof name !== "string") {
+      throw new Error("run:rename requires string runId and name");
+    }
+    return facade.renameRun(runId, name);
+  });
+  ipcMain.handle("all-in-1:run:delete", (_e, runId: unknown) =>
+    typeof runId === "string" ? facade.removeRun(runId) : false,
+  );
+  ipcMain.handle("all-in-1:run:search", (_e, query: unknown) =>
+    typeof query === "string" ? facade.searchRuns(query) : facade.searchRuns(""),
   );
   ipcMain.handle("all-in-1:approvals:list", () => facade.listApprovals());
   ipcMain.handle("all-in-1:approvals:grant", (_e, raw: unknown) => {
@@ -162,6 +176,19 @@ function registerHandlers(facade: DesktopFacade): void {
   // can explain a skipped provider instead of pretending it worked.
   ipcMain.handle("all-in-1:providers:warnings", () => facade.getProviderWarnings());
   ipcMain.handle("all-in-1:providers:test", (_e, raw: unknown) => facade.testProviderConfig(raw));
+  ipcMain.handle("all-in-1:providers:discover", (_e, input: unknown) => {
+    if (!input || typeof input !== "object") throw new Error("Invalid discover request");
+    const req = input as Record<string, unknown>;
+    if (typeof req.endpoint !== "string" || req.endpoint.trim() === "") {
+      throw new Error("endpoint must be a non-empty string");
+    }
+    return facade.discoverModels({
+      endpoint: req.endpoint,
+      protocol: typeof req.protocol === "string" ? req.protocol : undefined,
+      apiKeyEnv: typeof req.apiKeyEnv === "string" ? req.apiKeyEnv : null,
+      maxModels: typeof req.maxModels === "number" ? req.maxModels : undefined,
+    });
+  });
   // D6 folder picker. The renderer supplies NO path: it asks main to let the
   // user choose one. Main owns the dialog, and applies the result through the
   // sanitized settings write, so a directory can only enter the tool sandbox
@@ -181,6 +208,103 @@ function registerHandlers(facade: DesktopFacade): void {
     if (picked.added) facade.patchSettings({ workspaceRoots: picked.roots });
     return picked;
   });
+  // D35: the artifact surface. The renderer lists, reads, and downloads by id;
+  // the id is content-addressed and regex-validated on the store side, so a
+  // crafted id cannot escape the artifact directory. The bytes never cross
+  // the bridge as a raw path — the renderer receives the payload and writes
+  // it itself, or main writes it for a download.
+  ipcMain.handle("all-in-1:artifacts:list", () => facade.listArtifacts());
+  ipcMain.handle("all-in-1:artifacts:read", (_e, raw: unknown) => {
+    if (typeof raw !== "string" || raw.trim() === "") throw new Error("artifact id must be a non-empty string");
+    return facade.getArtifact(raw);
+  });
+  ipcMain.handle("all-in-1:artifacts:download", async (_e, raw: unknown) => {
+    if (typeof raw !== "string" || raw.trim() === "") throw new Error("artifact id must be a non-empty string");
+    const payload = facade.downloadArtifact(raw);
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    if (!win) throw new Error("no focused window to download into");
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: "Save artifact",
+      defaultPath: payload.artifactId.replace(/\//g, "_"),
+      // The content type drives the extension; a malformed id never reaches
+      // here because the store rejected it first.
+      filters: [{ name: "All files", extensions: ["*"] }],
+    });
+    if (canceled || !filePath) return { savedTo: null };
+    require("node:fs").writeFileSync(filePath, Buffer.from(payload.bytes));
+    return { savedTo: filePath };
+  });
+  // D35: analyze an uploaded image. The renderer supplies the artifact id
+  // (never raw bytes); the facade reads the bytes from the store and routes
+  // the VISION role through the frozen PREFERRED_FREE policy.
+  ipcMain.handle("all-in-1:artifacts:analyze", async (_e, raw: unknown) => {
+    if (typeof raw !== "string" || raw.trim() === "") throw new Error("artifact id must be a non-empty string");
+    return facade.analyzeImage(raw);
+  });
+  // D35: analyze an uploaded file by content type. image/* routes through the
+  // VISION path; text/* is decoded and summarized locally; anything else is
+  // reported as binary. No external API is called for any branch.
+  ipcMain.handle("all-in-1:artifacts:analyze-file", async (_e, raw: unknown) => {
+    if (typeof raw !== "string" || raw.trim() === "") throw new Error("artifact id must be a non-empty string");
+    return facade.analyzeFile(raw);
+  });
+  // D35: the renderer may upload a file the user picked in the OS dialog.
+  // Main owns the dialog and the bytes; the renderer supplies nothing but
+  // the resulting id, and the store confines the write to paths.artifacts.
+  ipcMain.handle("all-in-1:upload:bytes", async (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("upload bytes must be an object");
+    const r = raw as { bytes?: unknown; name?: string };
+    if (!Array.isArray(r.bytes) && !(r.bytes instanceof Uint8Array)) {
+      throw new Error("upload bytes must be an array-like of bytes");
+    }
+    const bytes = new Uint8Array(r.bytes as ArrayLike<number>);
+    const name = typeof r.name === "string" && r.name.trim() ? r.name.trim() : "upload.bin";
+    const stored = facade.uploadFile({ bytes, contentType: "application/octet-stream", labels: { source: "browser-upload", name } });
+    return { artifactId: stored.artifactId, name };
+  });
+  ipcMain.handle("all-in-1:upload:file", async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    if (!win) throw new Error("no focused window to pick a file in");
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+      title: "Choose a file to upload",
+      buttonLabel: "Upload",
+      properties: ["openFile", "multiSelections"],
+      filters: [{ name: "All files", extensions: ["*"] }],
+    });
+    if (canceled || filePaths.length === 0) return { artifactId: null };
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const ids: string[] = [];
+    for (const filePath of filePaths) {
+      const bytes = new Uint8Array(fs.readFileSync(filePath));
+      const stored = facade.uploadFile({
+        bytes,
+        contentType: "application/octet-stream",
+        runId: `upload-${Date.now()}`,
+        labels: { originalName: path.basename(filePath) },
+      });
+      ids.push(stored.artifactId);
+    }
+    return { artifactId: ids[0] ?? null, artifactIds: ids };
+  });
+  // D35: collab progress. Pull-only, like every other channel here; the
+  // renderer polls this while a collaborate run is in flight so a long
+  // orchestration shows live participant status instead of a frozen card.
+  ipcMain.handle("all-in-1:collab:progress", (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("Invalid collab progress request");
+    const q = raw as Record<string, unknown>;
+    if (typeof q.runId !== "string") throw new Error("runId must be a string");
+    return facade.getCollabProgress(q.runId);
+  });
+  // D35: compare progress. A compare run is N independent gated agent runs
+  // under one batch id; the renderer polls this while a compare runs so a long
+  // batch shows per-model status instead of a frozen card. Pull-only.
+  ipcMain.handle("all-in-1:compare:progress", (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("Invalid compare progress request");
+    const q = raw as Record<string, unknown>;
+    if (typeof q.batchId !== "string") throw new Error("batchId must be a string");
+    return facade.getCompareProgress(q.batchId);
+  });
   // D4 agent runtime. The renderer drives a run and learns which tools the
   // mode permits; it approves nothing here — the two channels above are the
   // only answer an approval request can receive.
@@ -198,6 +322,19 @@ function registerHandlers(facade: DesktopFacade): void {
     if (req.mode !== "INSPECT" && req.mode !== "SUGGEST" && req.mode !== "BUILD") {
       throw new Error("mode must be INSPECT, SUGGEST, or BUILD");
     }
+    // The user's model choice must survive the boundary: a validated
+    // provider/model pair reaches the engine as the preference the selector
+    // honours first — and only the pair, never a free-form override. When the
+    // engine cannot honour it, it falls back WITH A WARNING and reports the
+    // actual executed model; a silent substitution is the one outcome this
+    // shape check exists to prevent.
+    let preference: { provider: string; modelId: string } | undefined;
+    if (req.preference && typeof req.preference === "object") {
+      const p = req.preference as Record<string, unknown>;
+      if (typeof p.provider === "string" && typeof p.modelId === "string") {
+        preference = { provider: p.provider, modelId: p.modelId };
+      }
+    }
     return facade.runAgent({
       runId: req.runId,
       prompt: req.prompt,
@@ -208,8 +345,61 @@ function registerHandlers(facade: DesktopFacade): void {
       // D12: opt-in streaming flag on every run request; the bridge sink is
       // main-side, the renderer never supplies the event stream itself.
       streaming: req.streaming === true,
+      preference,
     });
   });
+  // Compare: one prompt, N selected models, each a full 7-gate run. The
+  // mapping (not the registration) is the seam, D29 pattern — the facade is
+  // only ever fed a validated ManyModelRequest.
+  ipcMain.handle("all-in-1:agent:many", (_e, raw: unknown) =>
+    facade.runMany(buildManyRequest(raw)),
+  );
+  // D34: the collaborative path. The mapping (not the registration) is the
+  // seam, D29 pattern — the facade is only ever fed a validated
+  // `CollaborateRequest`, and a raw object field that is not in this list
+  // never crosses the boundary.
+  ipcMain.handle("all-in-1:collab:run", (_e, raw: unknown) =>
+    facade.runCollab(buildCollabRequest(raw)),
+  );
+  // P1-6: media generation. The media gate runs first (frozen media.enabled =
+  // false in the MVP); no credential is read, no transport is opened, until
+  // the user flips the gate and registers a provider with media capabilities.
+  ipcMain.handle("all-in-1:media:generate", async (_e, raw: unknown) => {
+    if (!raw || typeof raw !== "object") throw new Error("Invalid media generate request");
+    const req = raw as Record<string, unknown>;
+    if (typeof req.capability !== "string" || !(MEDIA_CAPABILITIES as readonly string[]).includes(req.capability)) {
+      throw new Error(`capability must be one of: ${MEDIA_CAPABILITIES.join(", ")}`);
+    }
+    const runId = typeof req.runId === "string" ? req.runId : `media-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return facade.generateImage(
+      {
+        capability: req.capability as MediaRequest["capability"],
+        prompt: typeof req.prompt === "string" ? req.prompt : "",
+        referenceArtifactIds: Array.isArray(req.referenceArtifactIds)
+          ? (req.referenceArtifactIds as string[]).filter((x): x is string => typeof x === "string")
+          : undefined,
+        params: req.params && typeof req.params === "object"
+          ? (() => {
+              const p = req.params as Record<string, unknown>;
+              return {
+                aspectRatio: typeof p.aspectRatio === "string" ? p.aspectRatio : undefined,
+                resolution: Array.isArray(p.resolution) && p.resolution.length === 2
+                  ? [Number(p.resolution[0]), Number(p.resolution[1])]
+                  : undefined,
+                seed: typeof p.seed === "number" ? p.seed : undefined,
+              };
+            })()
+          : undefined,
+      },
+      runId,
+    );
+  });
+  // P1-6: cancel an in-flight media generation. The desktop stack owns the
+  // abort controller; this just triggers it. A cancelled attempt is never
+  // retried — the adapter throws a typed `cancelled` media error.
+  ipcMain.handle("all-in-1:media:cancel", (_e, runId: unknown) =>
+    typeof runId === "string" ? facade.cancelMediaRun(runId) : false,
+  );
   ipcMain.handle("all-in-1:agent:stream", (_e, raw: unknown) => {
     if (!raw || typeof raw !== "object") throw new Error("Invalid stream query");
     const q = raw as Record<string, unknown>;
@@ -268,8 +458,19 @@ function createWindow(facade: DesktopFacade): void {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      // D31: no embedded browser surface. Nothing here uses a <webview>, so the
+      // tag is switched off rather than merely left unused.
+      webviewTag: false,
       preload: join(__dirname, "preload.cjs"),
     },
+  });
+
+  // D31: the window is one static file that never opens another window and
+  // never navigates. The CSP already removes the network, so these two handlers
+  // close the remaining ways out — a popup, or a redirect off the app.
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event, url) => {
+    if (url !== RENDERER_URL) event.preventDefault();
   });
 
   win.loadFile(join(__dirname, "renderer", "index.html")).catch((e: unknown) => {
@@ -336,6 +537,15 @@ function bootstrap(): void {
   }
 
   app.whenReady().then(() => {
+    // D31: the renderer consumes no browser capability — no camera, microphone,
+    // geolocation, clipboard or OS notification (its toasts are in-page DOM).
+    // Denying every request therefore costs nothing legitimate, and it means a
+    // compromised renderer cannot ask the OS for anything at all.
+    session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => {
+      callback(false);
+    });
+    session.defaultSession.setPermissionCheckHandler(() => false);
+
     createWindow(facade);
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow(facade);

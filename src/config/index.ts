@@ -47,10 +47,12 @@ export function loadConfig(opts: LoadOptions = {}): VisualConfig {
   }
 
   const config = merged as unknown as VisualConfig;
-  // Re-freeze the fields the baseline locks.
+  // Re-freeze the fields the baseline locks. `mainCoder` is intentionally
+  // NOT re-clamped — it is optional by design so AI1 works normally when
+  // Atria (or any other named coder) is absent, disabled, or unconfigured.
   const frozen: VisualConfig = {
     ...config,
-    mainCoder: FROZEN_DEFAULTS.mainCoder,
+    mainCoder: config.mainCoder ?? FROZEN_DEFAULTS.mainCoder,
     media: FROZEN_DEFAULTS.media,
     workflow: FROZEN_DEFAULTS.workflow,
     cost: { ...config.cost, spendBudgetUsd: 0 },

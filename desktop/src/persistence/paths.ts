@@ -19,6 +19,8 @@ export interface DataPaths {
   readonly settings: string;
   readonly logs: string;
   readonly credentials: string;
+  /** Content-addressed artifact store base directory (screenshots, captures, user uploads). */
+  readonly artifacts: string;
 }
 
 export function resolveDataPaths(baseDir: string, subdir = "all-in-1"): DataPaths {
@@ -32,6 +34,7 @@ export function resolveDataPaths(baseDir: string, subdir = "all-in-1"): DataPath
     settings: join(root, "settings.json"),
     logs: join(root, "logs.jsonl"),
     credentials: join(root, "credentials.json"),
+    artifacts: join(root, "artifacts"),
   };
   ensureDir(root);
   return paths;
